@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
 /**
  * Уровни логирования
  */
@@ -13,9 +16,32 @@ enum LogLevel {
  */
 class Logger {
   private level: LogLevel;
+  private logDir: string;
   
   constructor(level: LogLevel = LogLevel.INFO) {
     this.level = level;
+    this.logDir = path.join(process.cwd(), 'logs');
+    this.ensureLogDirectory();
+  }
+  
+  /**
+   * Создание директории для логов, если она не существует
+   */
+  private ensureLogDirectory(): void {
+    if (!fs.existsSync(this.logDir)) {
+      fs.mkdirSync(this.logDir, { recursive: true });
+    }
+  }
+  
+  /**
+   * Запись в файл лога
+   */
+  private writeToFile(level: string, message: string): void {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${level}] ${timestamp}: ${message}\n`;
+    const logFile = path.join(this.logDir, `${level.toLowerCase()}.log`);
+    
+    fs.appendFileSync(logFile, logMessage);
   }
   
   /**
@@ -33,7 +59,9 @@ class Logger {
    */
   error(message: any, ...optionalParams: any[]): void {
     if (this.level >= LogLevel.ERROR) {
+      const errorMessage = `${message} ${optionalParams.map(p => JSON.stringify(p)).join(' ')}`;
       console.error(`[ERROR] ${new Date().toISOString()}:`, message, ...optionalParams);
+      this.writeToFile('ERROR', errorMessage);
     }
   }
   
@@ -44,7 +72,9 @@ class Logger {
    */
   warn(message: any, ...optionalParams: any[]): void {
     if (this.level >= LogLevel.WARN) {
+      const warnMessage = `${message} ${optionalParams.map(p => JSON.stringify(p)).join(' ')}`;
       console.warn(`[WARN] ${new Date().toISOString()}:`, message, ...optionalParams);
+      this.writeToFile('WARN', warnMessage);
     }
   }
   
@@ -55,7 +85,9 @@ class Logger {
    */
   info(message: any, ...optionalParams: any[]): void {
     if (this.level >= LogLevel.INFO) {
+      const infoMessage = `${message} ${optionalParams.map(p => JSON.stringify(p)).join(' ')}`;
       console.info(`[INFO] ${new Date().toISOString()}:`, message, ...optionalParams);
+      this.writeToFile('INFO', infoMessage);
     }
   }
   
@@ -66,7 +98,9 @@ class Logger {
    */
   debug(message: any, ...optionalParams: any[]): void {
     if (this.level >= LogLevel.DEBUG) {
+      const debugMessage = `${message} ${optionalParams.map(p => JSON.stringify(p)).join(' ')}`;
       console.debug(`[DEBUG] ${new Date().toISOString()}:`, message, ...optionalParams);
+      this.writeToFile('DEBUG', debugMessage);
     }
   }
 }

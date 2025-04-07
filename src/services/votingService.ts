@@ -6,6 +6,9 @@ import { ApplicationStatus, UserRole } from '../models/types';
 import type { MyContext } from '../index';
 import config from '../config/env';
 import { SystemSettingsRepository } from '../db/repositories/systemSettingsRepository';
+import { logger } from '../utils/logger';
+import { MinecraftService } from './minecraftService';
+import { escapeMarkdown } from '../utils/stringUtils';
 
 /**
  * Сервис для управления голосованиями
@@ -15,6 +18,8 @@ export class VotingService {
   private voteRepository: VoteRepository;
   private userRepository: UserRepository;
   private bot: Bot<MyContext>;
+  private systemSettingsRepository: SystemSettingsRepository;
+  private minecraftService: MinecraftService;
   
   /**
    * Инициализация сервиса голосования
@@ -25,6 +30,8 @@ export class VotingService {
     this.voteRepository = new VoteRepository();
     this.userRepository = new UserRepository();
     this.bot = bot;
+    this.systemSettingsRepository = new SystemSettingsRepository();
+    this.minecraftService = new MinecraftService();
   }
   
   /**
@@ -148,85 +155,133 @@ export class VotingService {
   private async processExpiredVoting(applicationId: number): Promise<void> {
     // Получаем данные о заявке
     const application = await this.applicationRepository.findById(applicationId);
-    
-    // Если статус не "на голосовании", прерываем выполнение
-    if (application.status !== ApplicationStatus.VOTING) {
-      console.log(`Заявка ${applicationId} не находится в статусе голосования, обработка отменена`);
+    if (!application) {
+      logger.error(`Заявка #${applicationId} не найдена`);
       return;
     }
     
-    // Получаем актуальное количество голосов
-    const votes = await this.voteRepository.countVotes(applicationId);
+    // Если заявка не в статусе голосования, прерываем обработку
+    if (application.status !== ApplicationStatus.VOTING) {
+      logger.info(`Заявка #${applicationId} не находится в статусе голосования, пропускаем обработку`);
+      return;
+    }
     
-    // Обновляем счетчики голосов в заявке
-    await this.applicationRepository.updateVoteCounts(applicationId, votes.positive, votes.negative);
-    
-    // Получаем данные о заявителе
+    // Получаем данные заявителя
     const applicant = await this.userRepository.findById(application.userId);
+    if (!applicant) {
+      logger.error(`Пользователь для заявки #${applicationId} не найден`);
+      return;
+    }
     
-    // Получаем системные настройки для проверки минимального количества голосов
-    const systemSettingsRepository = new SystemSettingsRepository();
-    const settings = await systemSettingsRepository.getSettings();
-    
-    // Проверяем, достаточно ли голосов
+    // Получаем количество голосов
+    const votes = await this.voteRepository.countVotes(applicationId);
     const totalVotes = votes.positive + votes.negative;
     
-    // Если голосов недостаточно, отклоняем заявку
-    if (totalVotes < settings.minVotesRequired) {
-      await this.applicationRepository.updateStatus(applicationId, ApplicationStatus.REJECTED);
-      
-      console.log(`❌ Заявка #${applicationId} отклонена из-за недостаточного количества голосов (${totalVotes}/${settings.minVotesRequired})`);
+    // Получаем минимальное необходимое количество голосов
+    const settings = await this.systemSettingsRepository.getSettings();
+    const minVotesRequired = settings.minVotesRequired;
+    
+    // Если недостаточно голосов, отклоняем заявку
+    if (totalVotes < minVotesRequired) {
+      // Обновляем статус заявки
+      await this.applicationRepository.updateStatus(applicationId, ApplicationStatus.EXPIRED);
       
       // Отправляем уведомление пользователю
-      if (applicant) {
-        try {
-          await this.bot.api.sendMessage(
-            Number(applicant.telegramId),
-            `❌ Ваша заявка на вступление в Minecraft-сервер отклонена.\n\n` +
-            `Причина: недостаточное количество голосов (${totalVotes}/${settings.minVotesRequired})\n\n` +
-            `Вы можете подать новую заявку позже.`
-          );
-        } catch (error) {
-          console.error(`Ошибка при отправке уведомления пользователю ${applicant.id}:`, error);
-        }
+      try {
+        await this.bot.api.sendMessage(
+          Number(applicant.telegramId),
+          `⌛ Срок голосования по вашей заявке истек.\n\n` +
+          `К сожалению, не набрано достаточное количество голосов (${totalVotes}/${minVotesRequired}).\n\n` +
+          `Вы можете подать новую заявку.`
+        );
+      } catch (error) {
+        logger.error(`Ошибка при отправке уведомления пользователю ${applicant.id}:`, error);
       }
       
+      logger.info(`⌛ Заявка #${applicationId} отклонена из-за недостаточного количества голосов (${totalVotes}/${minVotesRequired})`);
       return;
     }
     
-    // Вычисляем процент положительных голосов
-    const positivePercentage = (votes.positive / totalVotes) * 100;
+    // Рассчитываем процент положительных голосов
+    const positivePercentage = Math.round((votes.positive / totalVotes) * 100);
     
     // Одобрение/отклонение заявки в зависимости от результатов голосования
     if (positivePercentage >= 60) { // Порог одобрения 60%
+      // Генерируем оффлайн-UUID для пользователя
+      const offlineUUID = this.minecraftService.generateOfflineUUID(application.minecraftNickname);
+      
       // Одобряем заявку
       await this.applicationRepository.updateStatus(applicationId, ApplicationStatus.APPROVED);
       
-      // Обновляем роль пользователя
+      let addedToWhitelist = false; // Объявляем переменную в области видимости всего if-блока
+      
+      // Обновляем роль пользователя и сохраняем UUID
       if (applicant) {
         await this.userRepository.update(applicant.id, {
           role: UserRole.MEMBER,
-          canVote: true // Разрешаем новому участнику голосовать
+          canVote: true, // Разрешаем новому участнику голосовать
+          minecraftUUID: offlineUUID
         });
+        
+        // Добавляем игрока в белый список сервера
+        addedToWhitelist = await this.minecraftService.addToWhitelist(
+          application.minecraftNickname, 
+          offlineUUID
+        );
+        
+        // Формируем сообщение для пользователя
+        let userMessage = `✅ Поздравляем! Ваша заявка на вступление в Minecraft-сервер одобрена.\n\n` +
+                          `Результаты голосования:\n` +
+                          `👍 За: ${votes.positive}\n` +
+                          `👎 Против: ${votes.negative}\n\n` +
+                          `Теперь вы можете подключиться к серверу, используя свой никнейм: ${application.minecraftNickname}\n\n`;
+        
+        if (addedToWhitelist) {
+          userMessage += `Вы успешно добавлены в белый список сервера.\n\n`;
+        } else {
+          userMessage += `⚠️ Возникли проблемы с добавлением в белый список. Пожалуйста, обратитесь к администратору.\n\n`;
+        }
+        
+        userMessage += `Теперь вам доступны новые команды:\n` +
+                      `/profile - посмотреть ваш профиль\n` +
+                      `/viewprofile - посмотреть профили других участников\n` +
+                      `/members - просмотреть и оценить других участников\n\n` +
+                      `В сообществе действует система репутации. Положительные и отрицательные оценки влияют на статус участника.\n\n` +
+                      `Приятной игры!`;
         
         // Отправляем уведомление пользователю
         try {
           await this.bot.api.sendMessage(
             Number(applicant.telegramId),
-            `✅ Поздравляем! Ваша заявка на вступление в Minecraft-сервер одобрена.\n\n` +
-            `Результаты голосования:\n` +
-            `👍 За: ${votes.positive}\n` +
-            `👎 Против: ${votes.negative}\n\n` +
-            `Теперь вы можете подключиться к серверу, используя свой никнейм: ${application.minecraftNickname}\n\n` +
-            `Приятной игры!`
+            userMessage
           );
         } catch (error) {
-          console.error(`Ошибка при отправке уведомления пользователю ${applicant.id}:`, error);
+          logger.error(`Ошибка при отправке уведомления пользователю ${applicant.id}:`, error);
         }
       }
       
-      console.log(`✅ Заявка #${applicationId} одобрена (${votes.positive}/${totalVotes} голосов за)`);
+      logger.info(`✅ Заявка #${applicationId} одобрена (${votes.positive}/${totalVotes} голосов за)`);
       
+      // Уведомляем администратора о результатах голосования
+      try {
+        // Получаем всех администраторов
+        const admins = await this.userRepository.findAdmins();
+        
+        for (const admin of admins) {
+          await this.bot.api.sendMessage(
+            admin.telegramId,
+            `✅ По результатам голосования заявка #${applicationId} от ${escapeMarkdown(application.minecraftNickname)} была одобрена.\n\n` +
+            `Результаты голосования:\n` +
+            `👍 За: ${votes.positive}\n` +
+            `👎 Против: ${votes.negative}\n\n` +
+            `UUID игрока: \`${offlineUUID}\`\n\n` +
+            `${addedToWhitelist ? '✅ Игрок добавлен в белый список сервера.' : '⚠️ Не удалось добавить игрока в белый список сервера.'}`,
+            { parse_mode: "Markdown" }
+          );
+        }
+      } catch (error) {
+        logger.error('Ошибка при отправке уведомления администраторам:', error);
+      }
     } else {
       // Отклоняем заявку
       await this.applicationRepository.updateStatus(applicationId, ApplicationStatus.REJECTED);
@@ -243,11 +298,11 @@ export class VotingService {
             `Вы можете подать новую заявку позже.`
           );
         } catch (error) {
-          console.error(`Ошибка при отправке уведомления пользователю ${applicant.id}:`, error);
+          logger.error(`Ошибка при отправке уведомления пользователю ${applicant.id}:`, error);
         }
       }
       
-      console.log(`❌ Заявка #${applicationId} отклонена (${votes.negative}/${totalVotes} голосов против)`);
+      logger.info(`❌ Заявка #${applicationId} отклонена (${votes.negative}/${totalVotes} голосов против)`);
     }
   }
 } 

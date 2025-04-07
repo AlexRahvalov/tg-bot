@@ -1,10 +1,12 @@
 import { executeQuery } from '../db/connection';
 import { logger } from '../utils/logger';
 import { UserRepository } from '../db/repositories/userRepository';
-import type { User, Rating } from '../models/types';
+import type { User, Rating, RatingDetail } from '../models/types';
 import { UserRole } from '../models/types';
 import { MinecraftService } from './minecraftService';
 import { SystemSettingsRepository } from '../db/repositories/systemSettingsRepository';
+import { Bot } from 'grammy';
+import type { MyContext } from '../index';
 
 /**
  * Сервис для работы с оценками участников сообщества
@@ -13,6 +15,7 @@ export class RatingService {
   private userRepository: UserRepository;
   private minecraftService: MinecraftService;
   private systemSettingsRepository: SystemSettingsRepository;
+  private bot: Bot<MyContext> | null = null;
   
   constructor() {
     this.userRepository = new UserRepository();
@@ -20,13 +23,19 @@ export class RatingService {
     this.systemSettingsRepository = new SystemSettingsRepository();
   }
   
+  // Метод для установки экземпляра бота
+  setBotInstance(bot: Bot<MyContext>) {
+    this.bot = bot;
+  }
+  
   /**
    * Добавление оценки участнику
    * @param raterUserId ID оценивающего пользователя
    * @param targetUserId ID оцениваемого пользователя
    * @param isPositive Положительная ли оценка
+   * @param reason Причина оценки (опционально)
    */
-  async addRating(raterUserId: number, targetUserId: number, isPositive: boolean): Promise<boolean> {
+  async addRating(raterUserId: number, targetUserId: number, isPositive: boolean, reason?: string): Promise<boolean> {
     try {
       // Проверка, что пользователь не оценивает сам себя
       if (raterUserId === targetUserId) {
@@ -38,6 +47,28 @@ export class RatingService {
       const rater = await this.userRepository.findById(raterUserId);
       if (!rater.canVote) {
         logger.warn('Пользователь без права голосования пытается оценить другого', { raterUserId });
+        return false;
+      }
+
+      // Проверка кулдауна
+      const settings = await this.systemSettingsRepository.getSettings();
+      const lastRating = await this.getLastRatingBetweenUsers(raterUserId, targetUserId);
+      if (lastRating) {
+        const cooldownMinutes = settings.ratingCooldownMinutes || 60;
+        const cooldownEnd = new Date(lastRating.createdAt);
+        cooldownEnd.setMinutes(cooldownEnd.getMinutes() + cooldownMinutes);
+        
+        if (cooldownEnd > new Date()) {
+          logger.warn('Попытка оценить пользователя во время кулдауна', { raterUserId, targetUserId });
+          return false;
+        }
+      }
+
+      // Проверка дневного лимита оценок
+      const todayRatings = await this.getTodayRatingsCount(raterUserId);
+      const maxDailyRatings = settings.maxDailyRatings || 10;
+      if (todayRatings >= maxDailyRatings) {
+        logger.warn('Превышен дневной лимит оценок', { raterUserId, todayRatings });
         return false;
       }
       
@@ -61,15 +92,22 @@ export class RatingService {
         }
         
         // Если оценка не совпадает - обновляем её
-        await this.updateRating(existingRating.id, isPositive);
+        await this.updateRating(existingRating.id, isPositive, reason);
         await this.updateUserReputation(targetUserId);
         logger.info('Оценка обновлена', { raterUserId, targetUserId, isPositive });
         return true;
       }
       
       // Создаем новую оценку
-      await this.createRating(raterUserId, targetUserId, isPositive);
+      await this.createRating(raterUserId, targetUserId, isPositive, reason);
       await this.updateUserReputation(targetUserId);
+
+      // Обновляем статистику оценивающего
+      await this.userRepository.update(raterUserId, {
+        totalRatingsGiven: (rater.totalRatingsGiven || 0) + 1,
+        lastRatingGiven: new Date()
+      });
+
       logger.info('Оценка добавлена', { raterUserId, targetUserId, isPositive });
       
       // Проверяем, не превышен ли порог отрицательных оценок
@@ -107,15 +145,51 @@ export class RatingService {
   }
   
   /**
+   * Получение количества оценок, выданных пользователем за сегодня
+   * @param userId ID пользователя
+   */
+  private async getTodayRatingsCount(userId: number): Promise<number> {
+    const result = await executeQuery(
+      `SELECT COUNT(*) as count 
+       FROM ratings 
+       WHERE rater_id = ? 
+       AND DATE(created_at) = CURDATE()`,
+      [userId]
+    );
+    return result[0].count;
+  }
+  
+  /**
+   * Получение последней оценки между пользователями
+   * @param raterUserId ID оценивающего пользователя
+   * @param targetUserId ID оцениваемого пользователя
+   */
+  private async getLastRatingBetweenUsers(raterUserId: number, targetUserId: number): Promise<Rating | null> {
+    const ratings = await executeQuery(
+      `SELECT * FROM ratings 
+       WHERE rater_id = ? AND target_user_id = ?
+       ORDER BY created_at DESC LIMIT 1`,
+      [raterUserId, targetUserId]
+    );
+
+    if (ratings.length === 0) {
+      return null;
+    }
+
+    return this.mapDbToRating(ratings[0]);
+  }
+  
+  /**
    * Создание новой оценки
    * @param raterUserId ID оценивающего пользователя
    * @param targetUserId ID оцениваемого пользователя
    * @param isPositive Положительная ли оценка
+   * @param reason Причина оценки (опционально)
    */
-  private async createRating(raterUserId: number, targetUserId: number, isPositive: boolean): Promise<number> {
+  private async createRating(raterUserId: number, targetUserId: number, isPositive: boolean, reason?: string): Promise<number> {
     const result = await executeQuery(
-      `INSERT INTO ratings (rater_id, target_user_id, is_positive) VALUES (?, ?, ?)`,
-      [raterUserId, targetUserId, isPositive]
+      `INSERT INTO ratings (rater_id, target_user_id, is_positive, reason) VALUES (?, ?, ?, ?)`,
+      [raterUserId, targetUserId, isPositive, reason || null]
     );
     
     return result.insertId;
@@ -125,11 +199,12 @@ export class RatingService {
    * Обновление существующей оценки
    * @param ratingId ID оценки
    * @param isPositive Новое значение оценки
+   * @param reason Новая причина оценки (опционально)
    */
-  private async updateRating(ratingId: number, isPositive: boolean): Promise<void> {
+  private async updateRating(ratingId: number, isPositive: boolean, reason?: string): Promise<void> {
     await executeQuery(
-      `UPDATE ratings SET is_positive = ? WHERE id = ?`,
-      [isPositive, ratingId]
+      `UPDATE ratings SET is_positive = ?, reason = ? WHERE id = ?`,
+      [isPositive, reason || null, ratingId]
     );
   }
   
@@ -197,8 +272,44 @@ export class RatingService {
         await this.userRepository.updateCanVote(userId, false);
         
         // Удаляем из белого списка сервера
+        let removedFromWhitelist = false;
         if (user.minecraftUUID) {
-          await this.minecraftService.removeFromWhitelist(user.minecraftNickname, user.minecraftUUID);
+          removedFromWhitelist = await this.minecraftService.removeFromWhitelist(user.minecraftNickname, user.minecraftUUID);
+        }
+        
+        // Если бот инициализирован, отправляем уведомления
+        if (this.bot !== null) {
+          // Уведомление пользователю
+          try {
+            await this.bot.api.sendMessage(
+              user.telegramId,
+              `⚠️ Вы исключены из сообщества из-за низкой репутации.\n\n` +
+              `Ваша текущая репутация: ${user.reputation}\n` +
+              `Порог для исключения: ${-threshold}\n\n` +
+              `${removedFromWhitelist ? 'Вы удалены из белого списка сервера.' : 'Возникли проблемы с удалением из белого списка.'}\n\n` +
+              `Вы можете подать новую заявку на вступление после исправления проблем, которые привели к негативным оценкам.`
+            );
+          } catch (error) {
+            logger.error(`Ошибка при отправке уведомления пользователю ${userId}:`, error);
+          }
+          
+          // Уведомление администраторам
+          try {
+            const admins = await this.userRepository.findAdmins();
+            
+            for (const admin of admins) {
+              await this.bot.api.sendMessage(
+                admin.telegramId,
+                `⚠️ Пользователь ${user.minecraftNickname} (${user.username ? '@' + user.username : 'без никнейма'}) ` +
+                `автоматически исключен из сообщества из-за низкой репутации.\n\n` +
+                `Репутация: ${user.reputation}\n` +
+                `Порог для исключения: ${-threshold}\n\n` +
+                `${removedFromWhitelist ? '✅ Пользователь удален из белого списка сервера.' : '⚠️ Не удалось удалить пользователя из белого списка сервера.'}`
+              );
+            }
+          } catch (error) {
+            logger.error('Ошибка при отправке уведомления администраторам:', error);
+          }
         }
       }
     } catch (error) {
@@ -230,6 +341,72 @@ export class RatingService {
       logger.error('Ошибка при получении списка участников с репутацией', error);
       return [];
     }
+  }
+  
+  /**
+   * Получение детальной информации о рейтинге пользователя
+   * @param userId ID пользователя
+   * @returns Объект с количеством положительных и отрицательных оценок
+   */
+  async getUserRatingsDetails(userId: number): Promise<{ positiveCount: number; negativeCount: number }> {
+    try {
+      // Получаем все оценки пользователя
+      const ratings = await executeQuery(
+        `SELECT is_positive FROM ratings WHERE target_user_id = ?`,
+        [userId]
+      );
+      
+      // Считаем количество положительных и отрицательных оценок
+      let positiveCount = 0;
+      let negativeCount = 0;
+      
+      for (const rating of ratings) {
+        if (rating.is_positive) {
+          positiveCount++;
+        } else {
+          negativeCount++;
+        }
+      }
+      
+      return { positiveCount, negativeCount };
+    } catch (error) {
+      logger.error('Ошибка при получении детальной информации о рейтинге пользователя', error);
+      return { positiveCount: 0, negativeCount: 0 };
+    }
+  }
+
+  /**
+   * Получение детальной информации об оценках пользователя
+   * @param userId ID пользователя
+   */
+  async getRatingDetails(userId: number): Promise<RatingDetail[]> {
+    const ratings = await executeQuery(
+      `SELECT r.*, u.nickname as rater_nickname, u.username as rater_username
+       FROM ratings r
+       JOIN users u ON u.id = r.rater_id
+       WHERE r.target_user_id = ?
+       ORDER BY r.created_at DESC`,
+      [userId]
+    );
+
+    return ratings.map(this.mapDbToRatingDetail);
+  }
+
+  /**
+   * Преобразование записи из БД в объект RatingDetail
+   * @param dbRating Запись из БД
+   */
+  private mapDbToRatingDetail(dbRating: any): RatingDetail {
+    return {
+      id: dbRating.id,
+      targetUserId: dbRating.target_user_id,
+      raterId: dbRating.rater_id,
+      isPositive: Boolean(dbRating.is_positive),
+      raterNickname: dbRating.rater_nickname,
+      raterUsername: dbRating.rater_username,
+      reason: dbRating.reason,
+      createdAt: new Date(dbRating.created_at)
+    };
   }
 }
 

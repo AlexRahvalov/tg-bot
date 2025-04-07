@@ -7,10 +7,15 @@ import { applicationController, setBotInstance } from './controllers/application
 import { botController } from './controllers/botController';
 import { adminController } from './controllers/adminController';
 import { ratingController } from './controllers/ratingController';
+import { profileController } from './controllers/profileController';
 import { VotingService } from './services/votingService';
 import { logger } from './utils/logger';
 import { UserRepository } from './db/repositories/userRepository';
-import { UserRole } from './models/types';
+import { UserRole, ApplicationStatus } from './models/types';
+import { ratingService } from './services/ratingService';
+import { ProfileService } from './services/profileService';
+import { formatDate } from './utils/stringUtils';
+import { ApplicationRepository } from './db/repositories/applicationRepository';
 
 // Определяем интерфейс для данных сессии
 interface SessionData {
@@ -32,52 +37,212 @@ interface SessionData {
   askQuestionAppId?: number;
 }
 
-// Расширяем тип контекста, включая в него сессию
+// Расширяем тип контекста для использования сессии
 export type MyContext = Context & SessionFlavor<SessionData>;
 
-console.log('🤖 Запуск Telegram-бота для Minecraft-сервера...');
-
-// Инициализируем бота с токеном из конфигурации
+// Создаем экземпляр бота
 const bot = new Bot<MyContext>(config.botToken);
 
-// Хранилище сессий в памяти
-const sessionMap = new Map<string, SessionData>();
+// Инициализируем сервис голосования
+const votingService = new VotingService(bot);
 
-// Настраиваем хранилище сессий
+// Устанавливаем экземпляр бота в контроллер заявок
+setBotInstance(bot);
+
+// Добавляем middleware для работы с сессиями
 bot.use(session({
-  initial: (): SessionData => ({}),
-  storage: {
-    read: async (key) => {
-      return sessionMap.get(key) || {};
-    },
-    write: async (key, value) => {
-      sessionMap.set(key, value);
-    },
-    delete: async (key) => {
-      sessionMap.delete(key);
-    }
-  }
+  initial: (): SessionData => ({})
 }));
 
-// Подключаем контроллеры
+// Добавляем перехватчик всех обновлений для отладки
+bot.use(async (ctx, next) => {
+  let updateType = 'unknown';
+  if (ctx.message) updateType = 'message';
+  else if (ctx.callbackQuery) updateType = 'callback_query';
+  else if (ctx.inlineQuery) updateType = 'inline_query';
+  
+  const message = ctx.message?.text;
+  logger.info(`🔍 Получено обновление типа: ${updateType}, текст: ${message || 'нет'}`);
+  
+  await next();
+});
+
+// Прямая регистрация команды /profile с передачей в controller
+bot.command('profile', async (ctx) => {
+  logger.info('🔄 Получена команда /profile в глобальном обработчике - перенаправление в контроллер');
+  // Создаем экземпляр ProfileService только для этого вызова
+  const profileService = new ProfileService();
+  const userRepository = new UserRepository();
+  const applicationRepository = new ApplicationRepository();
+  
+  try {
+    if (!ctx.from) {
+      logger.error('Пользователь не определен в контексте');
+      await ctx.reply('❌ Не удалось определить пользователя');
+      return;
+    }
+    
+    const telegramId = ctx.from.id;
+    logger.info(`Запрос профиля для пользователя с Telegram ID: ${telegramId}`);
+
+    // Проверяем, зарегистрирован ли пользователь
+    const user = await userRepository.findByTelegramId(telegramId);
+    
+    // Безопасное логирование объекта пользователя
+    if (user) {
+      logger.info('Пользователь найден в базе данных');
+      logger.info(`Имя пользователя: ${user.username}, роль: ${user.role}`);
+    } else {
+      logger.info('Пользователь не найден в базе данных');
+    }
+    
+    if (!user) {
+      await ctx.reply('❌ Вы не зарегистрированы в системе. Пожалуйста, подайте заявку на вступление командой /apply');
+      return;
+    }
+    
+    // Получаем профиль пользователя
+    const profile = await profileService.getProfile(telegramId);
+    
+    // Безопасное логирование
+    if (profile) {
+      logger.info('Профиль пользователя найден');
+      logger.info(`Никнейм: ${profile.nickname}, Minecraft: ${profile.minecraft_username || 'не указан'}`);
+    } else {
+      logger.info('Профиль пользователя не найден');
+    }
+    
+    if (!profile) {
+      await ctx.reply('❌ Профиль не найден. Возможно, вы еще не являетесь участником сообщества.');
+      return;
+    }
+
+    // Получаем историю оценок
+    const ratingHistory = await profileService.getRatingHistory(profile.user_id);
+    
+    const reputationScore = profile.positive_ratings_received - profile.negative_ratings_received;
+
+    // Получаем последние заявки пользователя (если есть)
+    // Сначала получаем ID пользователя из профиля
+    const userId = profile.user_id;
+    const applications = await applicationRepository.findAllApplicationsByUserId(userId);
+    let applicationStatus = '';
+    
+    if (applications && applications.length > 0) {
+      // Берем самую последнюю заявку (первую в массиве)
+      const latestApp = applications[0];
+      // Добавляем информацию о статусе заявки (если она в активном состоянии)
+      if (latestApp && latestApp.status === ApplicationStatus.PENDING) {
+        applicationStatus = '\n📝 *У вас есть активная заявка на рассмотрении*';
+      } else if (latestApp && latestApp.status === ApplicationStatus.VOTING) {
+        applicationStatus = '\n🗳️ *Ваша заявка находится в процессе голосования*';
+      } else if (latestApp && latestApp.status === ApplicationStatus.REJECTED) {
+        applicationStatus = '\n❌ *Ваша последняя заявка была отклонена*';
+      }
+    }
+    
+    // Формируем сообщение с информацией о профиле
+    let message = `📊 *Ваш профиль:*\n\n`;
+    message += `👤 Telegram: @${user.username ? user.username.replace(/_/g, '\\_') : 'неизвестно'}\n`;
+    if (profile.minecraft_username) {
+      message += `🎮 Minecraft: ${profile.minecraft_username.replace(/_/g, '\\_')}\n`;
+    }
+    message += `📅 Дата вступления: ${formatDate(profile.join_date)}`;
+    
+    // Добавляем информацию о заявке, если она есть
+    if (applicationStatus) {
+      message += applicationStatus;
+    }
+    
+    message += `\n\n*Статистика рейтинга:*\n`;
+    message += `⭐️ Репутация: ${reputationScore}\n`;
+    message += `👍 Положительные оценки: ${profile.positive_ratings_received}\n`;
+    message += `👎 Отрицательные оценки: ${profile.negative_ratings_received}\n`;
+    message += `📊 Всего получено оценок: ${profile.total_ratings_received}\n`;
+    message += `✍️ Выдано оценок: ${profile.total_ratings_given}\n\n`;
+
+    // Добавляем последние оценки, если они есть
+    if (ratingHistory && ratingHistory.length > 0) {
+      message += `*Последние оценки:*\n`;
+      ratingHistory.slice(0, 5).forEach(rating => {
+        const icon = rating.isPositive ? '👍' : '👎';
+        message += `${icon} от ${rating.raterNickname}`;
+        if (rating.reason) {
+          message += `: ${rating.reason}`;
+        }
+        message += '\n';
+      });
+    }
+
+    await ctx.reply(message, { parse_mode: 'Markdown' });
+    logger.info('Сообщение с профилем успешно отправлено');
+  } catch (error) {
+    logger.error('Ошибка в обработке команды /profile:', error);
+    console.error('Подробная ошибка:', error);
+    await ctx.reply('❌ Произошла ошибка при получении профиля');
+  }
+});
+
+// Регистрируем обработчики команд
 bot.use(botController);
 bot.use(applicationController);
 bot.use(adminController);
+bot.use(profileController); // Регистрируем контроллер профиля
 bot.use(ratingController);
 
 // Обработка ошибок
 bot.catch((err) => {
   const ctx = err.ctx;
-  logger.error(`Ошибка при обработке обновления ${ctx.update.update_id}:`, err.error);
-  
-  if (err.error instanceof GrammyError) {
-    logger.error('Ошибка в запросе к Telegram API:', err.error);
-  } else if (err.error instanceof HttpError) {
-    logger.error('Ошибка при соединении с Telegram API:', err.error);
+  logger.error(`Error while handling update ${ctx.update.update_id}:`);
+  const e = err.error;
+  if (e instanceof GrammyError) {
+    logger.error("Error in request:", e.description);
+  } else if (e instanceof HttpError) {
+    logger.error("Could not contact Telegram:", e);
   } else {
-    logger.error('Неизвестная ошибка:', err.error);
+    logger.error("Unknown error:", e);
   }
 });
+
+// Функция запуска бота
+async function startBot() {
+  try {
+    // Инициализируем подключение к базе данных
+    await initDatabase();
+    
+    // Запускаем миграции
+    await runMigrations();
+    
+    // Создаем или обновляем аккаунт администратора
+    await ensureAdminAccount();
+    
+    // Устанавливаем команды бота
+    await bot.api.setMyCommands([
+      { command: "start", description: "Начать работу с ботом" },
+      { command: "help", description: "Показать список команд" },
+      { command: "apply", description: "Подать заявку на вступление" },
+      { command: "status", description: "Проверить статус заявки" },
+      { command: "profile", description: "Посмотреть свой профиль" },
+      { command: "viewprofile", description: "Посмотреть профили других участников" },
+      { command: "members", description: "Показать список участников" },
+    ]);
+    
+    // Запускаем бота
+    await bot.start({
+      onStart: (botInfo) => {
+        logger.info(`✅ Бот ${botInfo.username} успешно запущен`);
+      },
+    });
+  } catch (error) {
+    logger.error('❌ Ошибка при запуске бота:', error);
+    // Закрываем соединение с базой данных при ошибке
+    await closeDatabase();
+    process.exit(1);
+  }
+}
+
+// Запускаем бота
+startBot();
 
 // Создание или обновление аккаунта администратора
 async function ensureAdminAccount() {
@@ -86,9 +251,9 @@ async function ensureAdminAccount() {
     
     if (!adminTelegramId || isNaN(adminTelegramId)) {
       logger.warn('⚠️ ID администратора не указан в конфигурации или недействителен');
-    return;
-  }
-  
+      return;
+    }
+    
     const userRepository = new UserRepository();
     let adminUser = await userRepository.findByTelegramId(adminTelegramId);
     
@@ -115,66 +280,6 @@ async function ensureAdminAccount() {
   }
 }
 
-// Запуск бота
-async function startBot() {
-  try {
-    // Инициализируем подключение к базе данных
-    await initDatabase();
-    
-    // Запускаем миграции
-    await runMigrations();
-    
-    // Создаем аккаунт администратора
-    await ensureAdminAccount();
-    
-    // Передаем экземпляр бота в контроллер заявок
-    setBotInstance(bot);
-    
-    // Запуск бота
-    await bot.start({
-      onStart: (botInfo) => {
-        logger.info(`✅ Бот @${botInfo.username} успешно запущен`);
-      },
-    });
-    
-    // Запускаем сервис проверки истекших голосований
-    const votingService = new VotingService(bot);
-    const checkVotingsInterval = setInterval(async () => {
-      try {
-        const processedCount = await votingService.checkExpiredVotings();
-        if (processedCount > 0) {
-          logger.info(`✅ Обработано ${processedCount} истекших голосований`);
-        }
-      } catch (error) {
-        logger.error("❌ Ошибка при проверке истекших голосований:", error);
-      }
-    }, 60000); // Проверяем каждую минуту
-    
-    // Обработка сигналов остановки приложения
-    process.once('SIGINT', async () => {
-      logger.info('🛑 Получен сигнал SIGINT, останавливаем бота...');
-      clearInterval(checkVotingsInterval);
-      await bot.stop();
-      await closeDatabase();
-      logger.info('✅ Бот и база данных остановлены');
-    });
-    
-    process.once('SIGTERM', async () => {
-      logger.info('🛑 Получен сигнал SIGTERM, останавливаем бота...');
-      clearInterval(checkVotingsInterval);
-      await bot.stop();
-      await closeDatabase();
-      logger.info('✅ Бот и база данных остановлены');
-    });
-  } catch (error) {
-    logger.error('❌ Ошибка при запуске бота:', error);
-    await closeDatabase();
-    process.exit(1);
-  }
-}
-
-// Запускаем бота
-startBot().catch((error) => {
-  logger.error('Критическая ошибка при запуске бота:', error);
-  process.exit(1);
-}); 
+// Обработка сигналов завершения для корректного закрытия соединений
+process.once('SIGINT', () => closeDatabase());
+process.once('SIGTERM', () => closeDatabase()); 

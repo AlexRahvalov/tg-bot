@@ -11,6 +11,7 @@ import { messageService } from '../services/messageService';
 import { logger } from '../utils/logger';
 import { getBotInstance } from './applicationController';
 import { QuestionRepository } from "../db/repositories/questionRepository";
+import { MinecraftService } from "../services/minecraftService";
 
 // Создаем репозитории
 const userRepository = new UserRepository();
@@ -745,19 +746,38 @@ adminController.callbackQuery(/^app_approve_(\d+)$/, async (ctx) => {
     // Получаем данные пользователя
     const user = await userRepository.findById(application.userId);
     
+    // Генерируем оффлайн-UUID для пользователя
+    const minecraftService = new MinecraftService();
+    const offlineUUID = minecraftService.generateOfflineUUID(application.minecraftNickname);
+    
     // Обновляем статус заявки на "Одобрена"
     await applicationRepository.updateStatus(applicationId, ApplicationStatus.APPROVED);
     
-    // Обновляем роль пользователя на MEMBER и даем право голоса
+    // Обновляем роль пользователя на MEMBER, даем право голоса и сохраняем UUID
     await userRepository.update(user.id, {
       role: UserRole.MEMBER,
-      canVote: true
+      canVote: true,
+      minecraftUUID: offlineUUID
     });
     
-    // Отправляем уведомление администратору
-    await ctx.reply(
-      `✅ Заявка #${applicationId} от ${escapeMarkdown(application.minecraftNickname)} успешно одобрена.`
+    // Добавляем игрока в белый список сервера
+    const addedToWhitelist = await minecraftService.addToWhitelist(
+      application.minecraftNickname, 
+      offlineUUID
     );
+    
+    // Формируем сообщение об успешном одобрении
+    let responseMessage = `✅ Заявка #${applicationId} от ${escapeMarkdown(application.minecraftNickname)} успешно одобрена.`;
+    responseMessage += `\n\nUUID игрока: \`${offlineUUID}\``;
+    
+    if (addedToWhitelist) {
+      responseMessage += "\n\n✅ Игрок успешно добавлен в белый список сервера.";
+    } else {
+      responseMessage += "\n\n⚠️ Не удалось добавить игрока в белый список. Возможно, сервер недоступен.";
+    }
+    
+    // Отправляем уведомление администратору
+    await ctx.reply(responseMessage, { parse_mode: "Markdown" });
     
     // Отправляем уведомление пользователю
     if (getBotInstance()) {
@@ -775,14 +795,9 @@ adminController.callbackQuery(/^app_approve_(\d+)$/, async (ctx) => {
         logger.error(`Ошибка при отправке уведомления пользователю ${user.id}:`, error);
       }
     }
-    
-    // Возвращаемся к списку заявок
-    const keyboard = new InlineKeyboard()
-      .text("🔙 К списку заявок", "admin_applications");
-    
-    await ctx.reply("Выберите действие:", { reply_markup: keyboard });
   } catch (error) {
-    await handleErrorWithContext(ctx, error, "approveApplication");
+    logger.error('Ошибка при одобрении заявки:', error);
+    await ctx.reply('😔 Произошла ошибка при одобрении заявки. Пожалуйста, попробуйте позже.');
   }
 });
 
@@ -1091,6 +1106,22 @@ adminController.callbackQuery(/^view_questions_(\d+)$/, async (ctx) => {
     });
   } catch (error) {
     await handleErrorWithContext(ctx, error, "viewQuestionsCallback");
+  }
+});
+
+// Обработчик для команды обновления прав голосования всех участников
+adminController.command("update_all_voting_rights", adminMiddleware, async (ctx) => {
+  try {
+    // Обновляем права голосования для всех участников
+    const updatedCount = await userRepository.updateAllMembersVotingRights();
+    
+    if (updatedCount > 0) {
+      await ctx.reply(`✅ Права голосования обновлены для ${updatedCount} участников.`);
+    } else {
+      await ctx.reply("ℹ️ Нет участников для обновления прав голосования.");
+    }
+  } catch (error) {
+    await handleErrorWithContext(ctx, error, "updateAllVotingRights");
   }
 });
 

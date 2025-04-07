@@ -1,6 +1,7 @@
 import { executeQuery } from '../connection';
 import type { User } from '../../models/types';
 import { UserRole } from '../../models/types';
+import { logger } from '../../utils/logger';
 
 /**
  * Репозиторий для работы с пользователями
@@ -48,17 +49,19 @@ export class UserRepository {
   async create(userData: {
     telegramId: number;
     username?: string;
+    nickname?: string;
     minecraftNickname: string;
     role?: UserRole;
     canVote?: boolean;
   }): Promise<User> {
     const result = await executeQuery(
       `INSERT INTO users 
-       (telegram_id, username, minecraft_nickname, role, can_vote) 
-       VALUES (?, ?, ?, ?, ?)`,
+       (telegram_id, username, nickname, minecraft_nickname, role, can_vote) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
         userData.telegramId,
         userData.username || null,
+        userData.nickname || userData.username || userData.minecraftNickname,
         userData.minecraftNickname,
         userData.role || UserRole.APPLICANT,
         userData.canVote || false
@@ -84,6 +87,11 @@ export class UserRepository {
       params.push(userData.username);
     }
     
+    if (userData.nickname !== undefined) {
+      setValues.push('nickname = ?');
+      params.push(userData.nickname);
+    }
+    
     if (userData.minecraftNickname !== undefined) {
       setValues.push('minecraft_nickname = ?');
       params.push(userData.minecraftNickname);
@@ -107,6 +115,16 @@ export class UserRepository {
     if (userData.reputation !== undefined) {
       setValues.push('reputation = ?');
       params.push(userData.reputation);
+    }
+
+    if (userData.totalRatingsGiven !== undefined) {
+      setValues.push('total_ratings_given = ?');
+      params.push(userData.totalRatingsGiven);
+    }
+
+    if (userData.lastRatingGiven !== undefined) {
+      setValues.push('last_rating_given = ?');
+      params.push(userData.lastRatingGiven);
     }
     
     if (setValues.length === 0) {
@@ -195,21 +213,55 @@ export class UserRepository {
   }
   
   /**
-   * Преобразование записи из БД в объект User
-   * @param dbUser Запись из БД
+   * Обновление прав голосования для всех участников (MEMBER)
+   */
+  async updateAllMembersVotingRights(): Promise<number> {
+    try {
+      const result = await executeQuery(
+        `UPDATE users SET can_vote = true WHERE role = ?`,
+        [UserRole.MEMBER]
+      );
+      
+      logger.info(`Обновлены права голосования для всех участников (${result.affectedRows} пользователей)`);
+      return result.affectedRows;
+    } catch (error) {
+      logger.error('Ошибка при обновлении прав голосования участников:', error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Поиск пользователей по никнейму
+   * @param nickname Никнейм для поиска
+   */
+  async findByNickname(nickname: string): Promise<User[]> {
+    const users = await executeQuery(
+      `SELECT * FROM users WHERE nickname LIKE ?`,
+      [`%${nickname}%`]
+    );
+    
+    return users.map(this.mapDbToUser);
+  }
+  
+  /**
+   * Преобразование данных из БД в объект пользователя
+   * @param dbUser Данные пользователя из БД
    */
   private mapDbToUser(dbUser: any): User {
     return {
       id: dbUser.id,
       telegramId: dbUser.telegram_id,
       username: dbUser.username,
+      nickname: dbUser.nickname,
       minecraftNickname: dbUser.minecraft_nickname,
       minecraftUUID: dbUser.minecraft_uuid,
       role: dbUser.role as UserRole,
       canVote: Boolean(dbUser.can_vote),
-      reputation: dbUser.reputation,
+      reputation: dbUser.reputation || 0,
+      totalRatingsGiven: dbUser.total_ratings_given || 0,
+      lastRatingGiven: dbUser.last_rating_given,
       createdAt: new Date(dbUser.created_at),
-      updatedAt: new Date(dbUser.updated_at),
+      updatedAt: new Date(dbUser.updated_at)
     };
   }
 } 

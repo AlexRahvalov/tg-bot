@@ -157,11 +157,27 @@ botController.command("start", async (ctx) => {
 
 botController.command("help", async (ctx) => {
   try {
-    const keyboard = await keyboardService.getMainKeyboard(ctx.from?.id);
-    await ctx.reply(messageService.getHelpMessage(), { reply_markup: keyboard });
+    const message = `🤖 *Доступные команды:*
+
+*Основные команды:*
+/start - Начать работу с ботом
+/help - Показать список команд
+/apply - Подать заявку на вступление
+
+*Профиль и рейтинг:*
+/profile - Посмотреть свой профиль
+/viewprofile - Посмотреть профили других участников
+/members - Показать список участников с возможностью оценки
+
+*Для администраторов:*
+/admin - Открыть панель администратора
+/update_all_voting_rights - Обновить права голосования для всех участников
+
+Чтобы узнать больше о любой команде, просто введите её.`;
+    
+    await ctx.reply(message, { parse_mode: "Markdown" });
   } catch (error) {
     logger.error("Ошибка при обработке команды /help:", error);
-    await ctx.reply("Произошла ошибка. Пожалуйста, попробуйте позже.");
   }
 });
 
