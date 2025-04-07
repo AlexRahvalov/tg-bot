@@ -1,4 +1,4 @@
-import { Composer } from 'grammy';
+import { Composer, Bot, InlineKeyboard } from 'grammy';
 import type { MyContext } from '../index';
 import { keyboardService } from '../services/keyboardService';
 import { handleErrorWithContext } from '../utils/errorHandler';
@@ -312,7 +312,7 @@ botController.hears("🛠️ Админ-панель", async (ctx) => {
   }
 });
 
-// Обработка кнопки возврата в главное меню
+// Обработка кнопки возврата в главное меню из админ-панели
 botController.callbackQuery("admin_back_to_main", async (ctx) => {
   try {
     await ctx.answerCallbackQuery("Возвращаемся в главное меню");
@@ -326,6 +326,77 @@ botController.callbackQuery("admin_back_to_main", async (ctx) => {
   } catch (error) {
     logger.error("Ошибка при возврате в главное меню:", error);
     await ctx.answerCallbackQuery("Произошла ошибка. Пожалуйста, попробуйте позже.");
+  }
+});
+
+// Обработчик кнопки возврата в главное меню для обычных пользователей
+botController.callbackQuery("back_to_main", async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    
+    if (!ctx.from) return;
+    
+    const keyboard = await keyboardService.getMainKeyboard(ctx.from.id);
+    await ctx.reply(
+      "Главное меню бота для управления доступом к Minecraft-серверу.\n\n" +
+      "Используйте кнопки для навигации:", 
+      { reply_markup: keyboard }
+    );
+  } catch (error) {
+    logger.error('Ошибка при возврате в главное меню:', error);
+    await ctx.reply('😔 Произошла ошибка. Пожалуйста, попробуйте позже.');
+  }
+});
+
+// Обработка кнопки просмотра активных заявок
+botController.hears("🗳️ Активные заявки", async (ctx) => {
+  try {
+    if (!ctx.from) return;
+    
+    const telegramId = ctx.from.id;
+    const userRepository = new UserRepository();
+    const user = await userRepository.findByTelegramId(telegramId);
+    
+    // Проверяем права пользователя
+    if (!user || (user.role !== UserRole.MEMBER && user.role !== UserRole.ADMIN)) {
+      await ctx.reply('⚠️ У вас нет доступа к просмотру активных заявок.');
+      return;
+    }
+    
+    // Получаем список активных заявок
+    const applicationRepository = new ApplicationRepository();
+    const applications = await applicationRepository.findActiveApplications();
+    
+    if (applications.length === 0) {
+      await ctx.reply('📝 Нет активных заявок на данный момент.');
+      return;
+    }
+    
+    // Отправляем информацию о каждой заявке
+    await ctx.reply('📝 *Активные заявки:*', { parse_mode: 'Markdown' });
+    
+    for (const application of applications) {
+      // Получаем данные пользователя, подавшего заявку
+      const applicant = await userRepository.findById(application.userId);
+      
+      // Формируем информацию о заявке
+      const keyboard = new InlineKeyboard()
+        .text('🔍 Просмотреть детали', `app_view_${application.id}`);
+      
+      // Формируем сообщение с информацией о заявке
+      const message = messageService.formatApplicationMessage(
+        application,
+        applicant.username
+      );
+      
+      await ctx.reply(message, {
+        reply_markup: keyboard,
+        parse_mode: 'Markdown'
+      });
+    }
+  } catch (error) {
+    logger.error('Ошибка при просмотре активных заявок:', error);
+    await ctx.reply('😔 Произошла ошибка при получении списка заявок. Пожалуйста, попробуйте позже.');
   }
 });
 

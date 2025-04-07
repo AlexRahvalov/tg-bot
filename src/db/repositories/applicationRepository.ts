@@ -97,12 +97,12 @@ export class ApplicationRepository {
   }
   
   /**
-   * Получение заявок в статусе "На голосовании"
+   * Получение заявок в статусе "На голосовании" и "На рассмотрении"
    */
   async findVotingApplications(): Promise<Application[]> {
     const applications = await executeQuery(
-      `SELECT * FROM applications WHERE status = ?`,
-      [ApplicationStatus.VOTING]
+      `SELECT * FROM applications WHERE status = ? OR status = ? ORDER BY created_at DESC`,
+      [ApplicationStatus.VOTING, ApplicationStatus.PENDING]
     );
     
     return applications.map(this.mapDbToApplication);

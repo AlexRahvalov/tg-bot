@@ -3,7 +3,7 @@ import type { SessionFlavor } from 'grammy';
 import config from './config/env';
 import { initDatabase, closeDatabase } from './db/connection';
 import { runMigrations } from './db/migrations';
-import { applicationController } from './controllers/applicationController';
+import { applicationController, setBotInstance } from './controllers/applicationController';
 import { botController } from './controllers/botController';
 import { adminController } from './controllers/adminController';
 import { ratingController } from './controllers/ratingController';
@@ -29,6 +29,7 @@ interface SessionData {
   };
   minVotesRequired?: number;
   negativeThreshold?: number;
+  askQuestionAppId?: number;
 }
 
 // Расширяем тип контекста, включая в него сессию
@@ -125,6 +126,9 @@ async function startBot() {
     
     // Создаем аккаунт администратора
     await ensureAdminAccount();
+    
+    // Передаем экземпляр бота в контроллер заявок
+    setBotInstance(bot);
     
     // Запуск бота
     await bot.start({

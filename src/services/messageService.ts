@@ -68,45 +68,37 @@ class MessageService {
    * @returns Форматированное сообщение
    */
   formatApplicationInfoForAdmin(application: Application, applicantName: string): string {
-    let statusText = '';
-    switch (application.status) {
-      case ApplicationStatus.PENDING:
-        statusText = '⏳ На рассмотрении';
-        break;
-      case ApplicationStatus.VOTING:
-        statusText = '🗳️ Идет голосование';
-        break;
-      case ApplicationStatus.APPROVED:
-        statusText = '✅ Одобрена';
-        break;
-      case ApplicationStatus.REJECTED:
-        statusText = '❌ Отклонена';
-        break;
-      default:
-        statusText = '❓ Неизвестный статус';
+    const statusMap = {
+      'pending': '⏳ Ожидает рассмотрения',
+      'voting': '🗳️ На голосовании',
+      'approved': '✅ Одобрена',
+      'rejected': '❌ Отклонена',
+      'expired': '⏰ Истек срок голосования'
+    };
+    
+    const status = statusMap[application.status] || '❓ Неизвестный статус';
+    const votes = `👍 ${application.positiveVotes} | 👎 ${application.negativeVotes}`;
+    const now = new Date();
+    const createdAt = application.createdAt.toLocaleDateString('ru-RU');
+    
+    let message = `
+📝 *Заявка #${application.id}*
+
+👤 *Игрок:* ${this.escapeMarkdown(application.minecraftNickname)}
+${applicantName ? `*Телеграм:* @${this.escapeMarkdown(applicantName)}\n` : ''}
+*Причина вступления:*
+_${this.escapeMarkdown(application.reason)}_
+
+*Статус:* ${status}
+*Голоса:* ${votes}
+*Создана:* ${createdAt}`;
+    
+    if (application.votingEndsAt && application.status === 'voting') {
+      const timeLeft = this.getTimeLeft(application.votingEndsAt);
+      message += `\n*До окончания голосования:* ${timeLeft}`;
     }
     
-    // Добавляем информацию о голосовании, если оно идет
-    let votingInfo = '';
-    if (application.status === ApplicationStatus.VOTING && application.votingEndsAt) {
-      const now = new Date();
-      const endDate = new Date(application.votingEndsAt);
-      const remainingTime = Math.max(0, endDate.getTime() - now.getTime());
-      const remainingHours = Math.floor(remainingTime / (1000 * 60 * 60));
-      const remainingMinutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
-      
-      votingInfo = `\n\n📊 Информация о голосовании:\n` +
-        `👍 За: ${application.positiveVotes || 0}\n` +
-        `👎 Против: ${application.negativeVotes || 0}\n` +
-        `⏱️ Осталось: ${remainingHours} ч ${remainingMinutes} мин`;
-    }
-    
-    return `📋 Заявка #${application.id}\n\n` +
-      `👤 Пользователь: ${applicantName}\n` +
-      `🎮 Никнейм: ${application.minecraftNickname}\n` +
-      `📝 Причина: ${application.reason}\n` +
-      `📅 Создана: ${application.createdAt.toLocaleDateString()} ${application.createdAt.toLocaleTimeString()}\n` +
-      `🔄 Статус: ${statusText}${votingInfo}`;
+    return message;
   }
 
   /**
@@ -123,11 +115,17 @@ class MessageService {
     negativeVotes: number, 
     isPositive: boolean
   ): string {
-    return `📋 Вы проголосовали ${isPositive ? 'ЗА' : 'ПРОТИВ'} заявку #${applicationId}!\n\n` +
-      `Текущие результаты:\n` +
-      `👍 За: ${positiveVotes}\n` +
-      `👎 Против: ${negativeVotes}\n\n` +
-      `Спасибо за участие в голосовании!`;
+    if (isPositive) {
+      return `🎉 *Результаты голосования по заявке #${applicationId}*\n\n` +
+        `👍 За: ${positiveVotes}\n` +
+        `👎 Против: ${negativeVotes}\n\n` +
+        `✅ Заявка **одобрена**!`;
+    } else {
+      return `📊 *Результаты голосования по заявке #${applicationId}*\n\n` +
+        `👍 За: ${positiveVotes}\n` +
+        `👎 Против: ${negativeVotes}\n\n` +
+        `❌ Заявка **отклонена**.`;
+    }
   }
 
   /**
@@ -142,9 +140,11 @@ class MessageService {
     voterUsername: string,
     newReputation: number
   ): string {
-    return `👍 Участник ${voterUsername} оценил вас положительно!\n\n` +
-      `Ваша текущая репутация: ${newReputation}\n\n` +
-      `Спасибо за активное участие в жизни сервера!`;
+    return `
+👍 *Вы получили положительную оценку!*
+
+Пользователь @${this.escapeMarkdown(voterUsername)} оценил вас положительно.
+Ваша репутация: ${newReputation}`;
   }
 
   /**
@@ -163,15 +163,15 @@ class MessageService {
     newReputation: number,
     thresholdWarning: boolean
   ): string {
-    let message = `👎 Участник ${voterUsername} оценил вас негативно.\n\n` +
-      `Причина: ${reason}\n\n` +
-      `Ваша текущая репутация: ${newReputation}\n\n`;
-    
+    let message = `
+👎 *Вы получили отрицательную оценку!*
+
+Пользователь @${this.escapeMarkdown(voterUsername)} оценил вас отрицательно.
+*Причина:* ${this.escapeMarkdown(reason)}
+Ваша репутация: ${newReputation}`;
+
     if (thresholdWarning) {
-      message += `⚠️ Внимание! Ваша репутация приближается к критическому значению. ` +
-        `При достижении порогового значения будет рассмотрен вопрос о вашем исключении из сообщества.`;
-    } else {
-      message += `Пожалуйста, обратите внимание на причину негативной оценки и постарайтесь исправить ситуацию.`;
+      message += `\n\n⚠️ *Внимание!* Ваша репутация приближается к критическому порогу. При достижении порога, вы будете исключены из сервера.`;
     }
     
     return message;
@@ -216,7 +216,18 @@ class MessageService {
   }
 
   /**
-   * Форматирование сообщения о заявке
+   * Функция для экранирования специальных символов Markdown
+   * @param text Текст для экранирования
+   * @returns Экранированный текст
+   */
+  escapeMarkdown(text: string): string {
+    if (!text) return '';
+    // Экранируем спецсимволы Markdown: * _ ` [ ]
+    return text.replace(/([*_`\[\]])/g, '\\$1');
+  }
+
+  /**
+   * Форматирование сообщения с информацией о заявке
    * @param application Объект заявки
    * @param username Имя пользователя
    * @param questionCount Количество вопросов к заявке
@@ -241,10 +252,10 @@ class MessageService {
     let message = `
 📝 *Заявка #${application.id}*
 
-👤 *Игрок:* ${application.minecraftNickname}
-${username ? `*Телеграм:* @${username}\n` : ''}
+👤 *Игрок:* ${this.escapeMarkdown(application.minecraftNickname)}
+${username ? `*Телеграм:* @${this.escapeMarkdown(username)}\n` : ''}
 *Причина вступления:*
-_${application.reason}_
+_${this.escapeMarkdown(application.reason)}_
 
 *Статус:* ${status}
 *Голоса:* ${votes}

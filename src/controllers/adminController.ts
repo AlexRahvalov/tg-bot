@@ -1,14 +1,16 @@
-import { Composer, InlineKeyboard } from 'grammy';
-import type { MyContext } from '../index';
-import { keyboardService } from '../services/keyboardService';
+import { Bot, Composer, InlineKeyboard } from "grammy";
+import type { MyContext } from "../index";
+import { keyboardService } from "../services/keyboardService";
 import { handleErrorWithContext } from '../utils/errorHandler';
-import { UserRepository } from '../db/repositories/userRepository';
-import { ApplicationRepository } from '../db/repositories/applicationRepository';
-import { SystemSettingsRepository } from '../db/repositories/systemSettingsRepository';
-import { UserRole, ApplicationStatus } from '../models/types';
+import { UserRepository } from "../db/repositories/userRepository";
+import { ApplicationRepository } from "../db/repositories/applicationRepository";
+import { SystemSettingsRepository } from "../db/repositories/systemSettingsRepository";
+import { ApplicationStatus, UserRole } from "../models/types";
+import type { User } from "../models/types";
 import { messageService } from '../services/messageService';
 import { logger } from '../utils/logger';
-import { getBotInstance } from '../controllers/applicationController';
+import { getBotInstance } from './applicationController';
+import { QuestionRepository } from "../db/repositories/questionRepository";
 
 // Создаем репозитории
 const userRepository = new UserRepository();
@@ -39,6 +41,13 @@ const adminMiddleware = async (ctx: MyContext, next: () => Promise<void>) => {
 
 // Применяем middleware ко всем обработчикам в этом композере
 adminController.use(adminMiddleware);
+
+// Функция для экранирования специальных символов Markdown
+function escapeMarkdown(text: string): string {
+  if (!text) return '';
+  // Экранируем спецсимволы Markdown: * _ ` [ ]
+  return text.replace(/([*_`\[\]])/g, '\\$1');
+}
 
 // Обработка callback-запросов для админ-панели
 adminController.callbackQuery("admin_users", async (ctx) => {
@@ -92,35 +101,50 @@ adminController.callbackQuery("admin_applications", async (ctx) => {
     
     let message = "📝 *Заявки, ожидающие рассмотрения:*\n\n";
     
+    // Для каждой заявки отправляем отдельное сообщение с кнопками действий
     for (const application of applications) {
       const user = await userRepository.findById(application.userId);
       
-      const applicationInfo = `#${application.id} - ${application.minecraftNickname}${user.username ? ` (@${user.username})` : ''}\n` +
-                              `Статус: ${application.status === ApplicationStatus.PENDING ? '⏳ Ожидает' : 
+      const applicationInfo = `*Заявка #${application.id}* - ${escapeMarkdown(application.minecraftNickname)}${user.username ? ` (@${escapeMarkdown(user.username)})` : ''}\n` +
+                              `*Статус:* ${application.status === ApplicationStatus.PENDING ? '⏳ Ожидает' : 
                                         application.status === ApplicationStatus.VOTING ? '🗳️ Голосование' : 
                                         application.status === ApplicationStatus.APPROVED ? '✅ Одобрена' : 
                                         application.status === ApplicationStatus.REJECTED ? '❌ Отклонена' : 
                                         application.status === ApplicationStatus.EXPIRED ? '⏰ Истекла' : 
-                                        '❓ Неизвестно'}\n\n`;
+                                        '❓ Неизвестно'}\n` +
+                              `*Причина:* ${escapeMarkdown(application.reason.substring(0, 100))}${application.reason.length > 100 ? '...' : ''}`;
       
-      message += applicationInfo;
+      // Создаем клавиатуру с действиями для конкретной заявки
+      const keyboard = new InlineKeyboard();
       
-      // Создаем клавиатуру с действиями для заявки
-      const keyboard = new InlineKeyboard()
-        .text("📝 Детали", `app_view_${application.id}`).row()
-        .text("✅ Принять", `app_approve_${application.id}`)
-        .text("❌ Отклонить", `app_reject_${application.id}`).row()
-        .text("🗳️ Голосование", `app_start_voting_${application.id}`).row();
+      // Добавляем кнопки в зависимости от статуса заявки
+      if (application.status === ApplicationStatus.PENDING) {
+        keyboard
+          .text("🗳️ Начать голосование", `app_start_voting_${application.id}`).row()
+          .text("✅ Одобрить", `app_approve_${application.id}`)
+          .text("❌ Отклонить", `app_reject_${application.id}`).row();
+      } else if (application.status === ApplicationStatus.VOTING) {
+        keyboard
+          .text("✅ Одобрить", `app_approve_${application.id}`)
+          .text("❌ Отклонить", `app_reject_${application.id}`).row();
+      }
       
-      await ctx.reply(`Заявка #${application.id} от ${application.minecraftNickname}:`, { reply_markup: keyboard });
+      keyboard.text("🔍 Подробнее", `app_view_${application.id}`).row();
+      
+      // Отправляем сообщение с информацией о заявке и клавиатурой действий
+      await ctx.reply(applicationInfo, { 
+        reply_markup: keyboard,
+        parse_mode: "Markdown" 
+      });
     }
     
+    // Кнопка возврата назад
     const backKeyboard = new InlineKeyboard()
-      .text("🔙 Назад", "admin_back_to_main");
+      .text("🔙 Назад в админ-панель", "admin_back");
     
-    await ctx.reply("Вернуться в главное меню:", { reply_markup: backKeyboard });
+    await ctx.reply("Выберите действие:", { reply_markup: backKeyboard });
   } catch (error) {
-    await handleErrorWithContext(ctx, error, "adminApplicationsList");
+    await handleErrorWithContext(ctx, error, "adminApplications");
   }
 });
 
@@ -637,27 +661,24 @@ adminController.callbackQuery(/^app_view_(\d+)$/, async (ctx) => {
     
     // Получаем данные заявки
     const application = await applicationRepository.findById(applicationId);
-    
-    // Получаем данные пользователя
     const user = await userRepository.findById(application.userId);
     
-    // Формируем детальное сообщение о заявке
-    const statusText = application.status === ApplicationStatus.PENDING ? '⏳ Ожидает' : 
-                     application.status === ApplicationStatus.VOTING ? '🗳️ Голосование' : 
-                     application.status === ApplicationStatus.APPROVED ? '✅ Одобрена' : 
-                     application.status === ApplicationStatus.REJECTED ? '❌ Отклонена' : 
-                     application.status === ApplicationStatus.EXPIRED ? '⏰ Истекла' : 
-                     '❓ Неизвестно';
+    // Получаем количество вопросов к заявке
+    const questionRepository = new QuestionRepository();
+    const questions = await questionRepository.findByApplicationId(applicationId);
     
-    const createdDate = new Date(application.createdAt).toLocaleString('ru-RU');
-    
-    let message = `📝 *Заявка #${application.id}*\n\n` +
-                 `👤 *Пользователь:* ${user.username ? `@${user.username}` : 'Не указан'}\n` +
-                 `🆔 *Telegram ID:* ${user.telegramId}\n` +
-                 `🎮 *Никнейм в Minecraft:* ${application.minecraftNickname}\n` +
-                 `📊 *Статус:* ${statusText}\n` +
-                 `📅 *Дата подачи:* ${createdDate}\n\n` +
-                 `📌 *Причина вступления:*\n${application.reason}`;
+    // Формируем сообщение с информацией о заявке
+    let message = `📋 *Заявка #${application.id}*\n\n` +
+                  `👤 *Пользователь:* ${user.username ? `@${escapeMarkdown(user.username)}` : 'Не указан'}\n` +
+                  `🎮 *Никнейм:* ${escapeMarkdown(application.minecraftNickname)}\n` +
+                  `📅 *Дата создания:* ${application.createdAt.toLocaleString('ru-RU')}\n` +
+                  `📝 *Причина:* ${escapeMarkdown(application.reason)}\n` +
+                  `🔄 *Статус:* ${application.status === ApplicationStatus.PENDING ? '⏳ Ожидает' : 
+                                application.status === ApplicationStatus.VOTING ? '🗳️ Голосование' : 
+                                application.status === ApplicationStatus.APPROVED ? '✅ Одобрена' : 
+                                application.status === ApplicationStatus.REJECTED ? '❌ Отклонена' : 
+                                application.status === ApplicationStatus.EXPIRED ? '⏰ Истекла' : 
+                                '❓ Неизвестно'}`;
     
     // Добавляем информацию о голосовании, если заявка находится на голосовании
     if (application.status === ApplicationStatus.VOTING) {
@@ -673,6 +694,11 @@ adminController.callbackQuery(/^app_view_(\d+)$/, async (ctx) => {
       }
     }
     
+    // Информация о вопросах
+    if (questions.length > 0) {
+      message += `\n\n❓ *Вопросов:* ${questions.length}`;
+    }
+    
     // Создаем клавиатуру для действий с заявкой
     const keyboard = new InlineKeyboard();
     
@@ -685,6 +711,13 @@ adminController.callbackQuery(/^app_view_(\d+)$/, async (ctx) => {
       keyboard
         .text("✅ Принять", `app_approve_${application.id}`)
         .text("❌ Отклонить", `app_reject_${application.id}`).row();
+    }
+    
+    // Добавляем кнопки для работы с вопросами
+    keyboard.text("❓ Задать вопрос", `ask_question_${application.id}`).row();
+    
+    if (questions.length > 0) {
+      keyboard.text(`📝 Вопросы (${questions.length})`, `view_questions_${application.id}`).row();
     }
     
     keyboard.text("🔙 Назад к списку", "admin_applications").row();
@@ -723,7 +756,7 @@ adminController.callbackQuery(/^app_approve_(\d+)$/, async (ctx) => {
     
     // Отправляем уведомление администратору
     await ctx.reply(
-      `✅ Заявка #${applicationId} от ${application.minecraftNickname} успешно одобрена.`
+      `✅ Заявка #${applicationId} от ${escapeMarkdown(application.minecraftNickname)} успешно одобрена.`
     );
     
     // Отправляем уведомление пользователю
@@ -734,7 +767,7 @@ adminController.callbackQuery(/^app_approve_(\d+)$/, async (ctx) => {
           await bot.api.sendMessage(
             Number(user.telegramId),
             `✅ Поздравляем! Ваша заявка на вступление в Minecraft-сервер одобрена.\n\n` +
-            `Теперь вы можете подключиться к серверу, используя свой никнейм: ${application.minecraftNickname}\n\n` +
+            `Теперь вы можете подключиться к серверу, используя свой никнейм: ${escapeMarkdown(application.minecraftNickname)}\n\n` +
             `Приятной игры!`
           );
         }
@@ -772,7 +805,7 @@ adminController.callbackQuery(/^app_reject_(\d+)$/, async (ctx) => {
     
     // Отправляем уведомление администратору
     await ctx.reply(
-      `❌ Заявка #${applicationId} от ${application.minecraftNickname} отклонена.`
+      `❌ Заявка #${applicationId} от ${escapeMarkdown(application.minecraftNickname)} отклонена.`
     );
     
     // Отправляем уведомление пользователю
@@ -869,9 +902,9 @@ adminController.callbackQuery(/^app_start_voting_(\d+)$/, async (ctx) => {
           await bot.api.sendMessage(
             Number(voter.telegramId),
             `🗳️ *Новое голосование по заявке на вступление*\n\n` +
-            `👤 Пользователь: ${user.username ? `@${user.username}` : 'Не указан'}\n` +
-            `🎮 Никнейм: ${application.minecraftNickname}\n` +
-            `📝 Причина: ${application.reason.substring(0, 100)}${application.reason.length > 100 ? '...' : ''}\n\n` +
+            `👤 Пользователь: ${user.username ? `@${escapeMarkdown(user.username)}` : 'Не указан'}\n` +
+            `🎮 Никнейм: ${escapeMarkdown(application.minecraftNickname)}\n` +
+            `📝 Причина: ${escapeMarkdown(application.reason.substring(0, 100))}${application.reason.length > 100 ? '...' : ''}\n\n` +
             `⏱️ Окончание голосования: ${votingEndsAt.toLocaleString('ru-RU')}`,
             { 
               reply_markup: voteKeyboard,
@@ -891,6 +924,173 @@ adminController.callbackQuery(/^app_start_voting_(\d+)$/, async (ctx) => {
     await ctx.reply("Выберите действие:", { reply_markup: keyboard });
   } catch (error) {
     await handleErrorWithContext(ctx, error, "startVoting");
+  }
+});
+
+// Обработчик для кнопки "Задать вопрос"
+adminController.callbackQuery(/^ask_question_(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    
+    // Извлекаем ID заявки из callback данных
+    const applicationId = parseInt(ctx.match?.[1] || '0');
+    
+    // Получаем данные заявки
+    const application = await applicationRepository.findById(applicationId);
+    
+    // Создаем сессию для диалога с вопросом
+    await ctx.reply(
+      "Пожалуйста, введите ваш вопрос к заявителю:",
+      { parse_mode: "Markdown" }
+    );
+    
+    // Сохраняем информацию о том, что пользователь собирается задать вопрос
+    if (ctx.session) {
+      ctx.session.askQuestionAppId = applicationId;
+      ctx.session.step = 'waiting_question';
+    }
+  } catch (error) {
+    await handleErrorWithContext(ctx, error, "askQuestionCallback");
+  }
+});
+
+// Обработчик для текстовых сообщений при ожидании вопроса
+adminController.on('message:text', async (ctx) => {
+  if (!ctx.session || ctx.session.step !== 'waiting_question' || !ctx.session.askQuestionAppId) {
+    return;
+  }
+  
+  try {
+    const userId = ctx.from?.id;
+    if (!userId) {
+      await ctx.reply("❌ Не удалось определить пользователя");
+      return;
+    }
+    
+    const applicationId = ctx.session.askQuestionAppId;
+    const questionText = ctx.message.text;
+    
+    // Получаем данные заявки
+    const application = await applicationRepository.findById(applicationId);
+    
+    // Создаем новый вопрос в базе данных
+    const questionRepository = new QuestionRepository();
+    const questionData = {
+      applicationId,
+      askerId: userId,
+      text: questionText,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const questionId = await questionRepository.addQuestion(questionData);
+    
+    // Отправляем уведомление пользователю о новом вопросе
+    const bot = getBotInstance();
+    if (bot) {
+      try {
+        const applicantMessage = `❓ *У администратора появился вопрос по вашей заявке #${applicationId}*\n\n` +
+                               `*Вопрос:* ${escapeMarkdown(questionText)}\n\n` +
+                               `Чтобы ответить на вопрос, используйте команду /applications и найдите вопрос в деталях заявки.`;
+                              
+        await bot.api.sendMessage(application.userId, applicantMessage, {
+          parse_mode: "Markdown"
+        });
+      } catch (e) {
+        logger.error(`Не удалось отправить уведомление о вопросе пользователю: ${e}`);
+      }
+    }
+    
+    // Возвращаемся к просмотру заявки с сообщением об успехе
+    const keyboard = new InlineKeyboard()
+      .text("🔙 Вернуться к заявке", `app_view_${applicationId}`);
+    
+    await ctx.reply(
+      `✅ Вопрос успешно добавлен и отправлен заявителю!`,
+      { reply_markup: keyboard, parse_mode: "Markdown" }
+    );
+    
+    // Сбрасываем состояние
+    ctx.session.step = undefined;
+    ctx.session.askQuestionAppId = undefined;
+    
+  } catch (error) {
+    logger.error(`Ошибка при работе с вопросом: ${error}`);
+    await ctx.reply(
+      "⚠️ Произошла ошибка при добавлении вопроса. Пожалуйста, попробуйте позже.",
+      { parse_mode: "Markdown" }
+    );
+    
+    // Сбрасываем состояние
+    if (ctx.session) {
+      ctx.session.step = undefined;
+      ctx.session.askQuestionAppId = undefined;
+    }
+  }
+});
+
+// Обработчик для просмотра вопросов к заявке
+adminController.callbackQuery(/^view_questions_(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    
+    // Извлекаем ID заявки из callback данных
+    const applicationId = parseInt(ctx.match?.[1] || '0');
+    
+    // Получаем вопросы к заявке
+    const questionRepository = new QuestionRepository();
+    const questions = await questionRepository.findByApplicationId(applicationId);
+    
+    if (questions.length === 0) {
+      return await ctx.reply(
+        "⚠️ К этой заявке пока нет вопросов.",
+        { 
+          reply_markup: new InlineKeyboard()
+            .text("🔙 Вернуться к заявке", `app_view_${applicationId}`)
+        }
+      );
+    }
+    
+    // Получаем информацию о пользователях
+    const userIds = [...new Set(questions.map(q => q.askerId))];
+    const users = await Promise.all(userIds.map(id => userRepository.findById(id)));
+    
+    // Создаем карту пользователей с правильной типизацией
+    const userMap: Record<number, User> = {};
+    users.forEach(user => {
+      if (user) {
+        userMap[user.id] = user;
+      }
+    });
+    
+    // Формируем сообщение с вопросами
+    let message = `📝 *Вопросы по заявке #${applicationId}*\n\n`;
+    
+    questions.forEach((question, index) => {
+      const user = userMap[question.askerId];
+      const userName = user ? (user.username ? `@${escapeMarkdown(user.username)}` : `ID: ${user.telegramId}`) : 'неизвестен';
+      
+      message += `*Вопрос #${index + 1}* (от ${userName}):\n${escapeMarkdown(question.text)}\n`;
+      
+      if (question.answer) {
+        message += `\n*Ответ:*\n${escapeMarkdown(question.answer)}\n`;
+      } else {
+        message += "\n*Ответ:* Ожидается\n";
+      }
+      
+      if (index < questions.length - 1) {
+        message += "\n---------------------\n\n";
+      }
+    });
+    
+    // Отправляем сообщение с вопросами
+    await ctx.reply(message, {
+      reply_markup: new InlineKeyboard()
+        .text("🔙 Вернуться к заявке", `app_view_${applicationId}`),
+      parse_mode: "Markdown"
+    });
+  } catch (error) {
+    await handleErrorWithContext(ctx, error, "viewQuestionsCallback");
   }
 });
 

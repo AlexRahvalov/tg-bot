@@ -31,9 +31,10 @@ class KeyboardService {
           keyboard.text("🛠️ Админ-панель");
         }
         
-        // Для участников добавляем кнопку просмотра участников
+        // Для участников добавляем кнопку просмотра участников и просмотра активных заявок
         if (user && (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN)) {
           keyboard.text("👥 Участники").row();
+          keyboard.text("🗳️ Активные заявки").row();
         }
       } catch (error) {
         logger.error("Ошибка при проверке прав пользователя:", error);

@@ -21,18 +21,34 @@ export const runMigrations = async (): Promise<void> => {
     for (const sqlFile of sqlFiles) {
       console.log(`⏳ Выполнение миграции: ${sqlFile}`);
       
-      // Чтение и выполнение SQL-скрипта
+      // Чтение SQL-скрипта
       const sqlPath = join(__dirname, sqlFile);
       const sql = await readFile(sqlPath, 'utf8');
       
-      // Разделяем SQL на отдельные команды по разделителю ';'
-      const sqlCommands = sql
-        .split(';')
-        .filter(command => command.trim().length > 0);
-      
-      // Выполняем каждую команду отдельно
-      for (const sqlCommand of sqlCommands) {
-        await executeQuery(sqlCommand + ';');
+      try {
+        // Выполняем весь скрипт целиком
+        await executeQuery(sql);
+        console.log(`✅ Миграция ${sqlFile} успешно выполнена`);
+      } catch (error) {
+        console.error(`❌ Ошибка при выполнении миграции ${sqlFile}:`, error);
+        
+        // Если произошла ошибка, попробуем выполнить команды по отдельности
+        console.log(`⏳ Пробуем выполнить команды из ${sqlFile} по отдельности...`);
+        
+        // Разделяем SQL на отдельные команды
+        const sqlCommands = sql
+          .split(';')
+          .map(command => command.trim())
+          .filter(command => command.length > 0);
+        
+        for (const sqlCommand of sqlCommands) {
+          try {
+            await executeQuery(sqlCommand);
+          } catch (cmdError) {
+            console.error(`❌ Ошибка в SQL команде: ${sqlCommand}`, cmdError);
+            throw cmdError;
+          }
+        }
       }
     }
     
