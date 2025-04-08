@@ -49,7 +49,7 @@ export class ProfileService {
             }
 
             const user = rows[0];
-            logger.info(`Получены данные профиля: ${JSON.stringify(user)}`);
+            logger.info(`Получены данные профиля: id=${user.user_id}, nickname=${user.nickname}, minecraft=${user.minecraft_username}`);
 
             return {
                 user_id: user.user_id,

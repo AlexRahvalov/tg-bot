@@ -41,6 +41,9 @@ export interface User {
   reputation: number;        // Репутация пользователя
   totalRatingsGiven: number; // Общее количество выданных оценок
   lastRatingGiven?: Date;    // Дата последней выданной оценки
+  positiveRatingsReceived?: number; // Количество положительных оценок
+  negativeRatingsReceived?: number; // Количество отрицательных оценок
+  totalRatingsReceived?: number;   // Общее количество полученных оценок
   createdAt: Date;           // Дата создания
   updatedAt: Date;           // Дата обновления
 }

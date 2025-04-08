@@ -164,12 +164,29 @@ export class UserRepository {
    * Получение всех участников сообщества
    */
   async findAllMembers(): Promise<User[]> {
-    const users = await executeQuery(
-      `SELECT * FROM users WHERE role = ?`,
-      [UserRole.MEMBER]
-    );
-    
-    return users.map(this.mapDbToUser);
+    try {
+      logger.info('Запрос на получение всех участников сообщества');
+      
+      // Получаем и участников (MEMBER), и администраторов (ADMIN)
+      const users = await executeQuery(
+        `SELECT u.id, u.telegram_id, u.username, u.nickname, 
+                u.minecraft_nickname, u.minecraft_uuid, u.role, 
+                u.can_vote, u.total_ratings_given, u.last_rating_given,
+                u.positive_ratings_received, u.negative_ratings_received, 
+                u.total_ratings_received, u.created_at, u.updated_at,
+                (u.positive_ratings_received - u.negative_ratings_received) as reputation
+         FROM users u 
+         WHERE u.role IN (?, ?)
+         ORDER BY u.nickname ASC`,
+        [UserRole.MEMBER, UserRole.ADMIN]
+      );
+      
+      logger.info(`Найдено ${users.length} участников`);
+      return users.map(this.mapDbToUser);
+    } catch (error) {
+      logger.error('Ошибка при получении участников сообщества:', error);
+      throw error;
+    }
   }
   
   /**
@@ -260,6 +277,9 @@ export class UserRepository {
       reputation: dbUser.reputation || 0,
       totalRatingsGiven: dbUser.total_ratings_given || 0,
       lastRatingGiven: dbUser.last_rating_given,
+      positiveRatingsReceived: dbUser.positive_ratings_received || 0,
+      negativeRatingsReceived: dbUser.negative_ratings_received || 0,
+      totalRatingsReceived: dbUser.total_ratings_received || 0,
       createdAt: new Date(dbUser.created_at),
       updatedAt: new Date(dbUser.updated_at)
     };

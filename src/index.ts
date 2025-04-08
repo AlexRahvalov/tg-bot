@@ -1,13 +1,11 @@
-import { Bot, Context, session, GrammyError, HttpError } from 'grammy';
+import { Bot, Context, session, GrammyError, HttpError, InlineKeyboard } from 'grammy';
 import type { SessionFlavor } from 'grammy';
 import config from './config/env';
-import { initDatabase, closeDatabase } from './db/connection';
+import { initDatabase, closeDatabase, executeQuery } from './db/connection';
 import { runMigrations } from './db/migrations';
 import { applicationController, setBotInstance } from './controllers/applicationController';
 import { botController } from './controllers/botController';
 import { adminController } from './controllers/adminController';
-import { ratingController } from './controllers/ratingController';
-import { profileController } from './controllers/profileController';
 import { VotingService } from './services/votingService';
 import { logger } from './utils/logger';
 import { UserRepository } from './db/repositories/userRepository';
@@ -16,13 +14,25 @@ import { ratingService } from './services/ratingService';
 import { ProfileService } from './services/profileService';
 import { formatDate } from './utils/stringUtils';
 import { ApplicationRepository } from './db/repositories/applicationRepository';
+import { profileController } from './controllers/profileController';
 
-// Определяем интерфейс для данных сессии
+// Енам для типа оценки
+export enum RatingType {
+  POSITIVE = 'positive',
+  NEGATIVE = 'negative'
+}
+
+// Расширяем интерфейс SessionData для поддержки состояния оценки
 interface SessionData {
-  step?: string;
-  form?: {
+  applyState?: {
+    step: string;
     minecraftNickname?: string;
-    reason?: string;
+    discordUsername?: string;
+  };
+  ratingState?: {
+    targetUserId: number;
+    ratingType: RatingType;
+    step: string;
   };
   applicationId?: number;
   questionId?: number;
@@ -35,6 +45,14 @@ interface SessionData {
   minVotesRequired?: number;
   negativeThreshold?: number;
   askQuestionAppId?: number;
+  // Добавляем поля для процесса оценки пользователей
+  step?: string;
+  // Добавляем поле для хранения данных формы заявки
+  form?: {
+    minecraftNickname?: string;
+    reason?: string;
+    [key: string]: any;
+  };
 }
 
 // Расширяем тип контекста для использования сессии
@@ -46,15 +64,236 @@ const bot = new Bot<MyContext>(config.botToken);
 // Инициализируем сервис голосования
 const votingService = new VotingService(bot);
 
+// Передаем экземпляр бота в сервис рейтингов
+ratingService.setBotInstance(bot);
+
 // Устанавливаем экземпляр бота в контроллер заявок
 setBotInstance(bot);
+
+// =====================================================
+// ВАЖНО: Регистрация обработчиков команд НАПРЯМУЮ к боту
+// =====================================================
+bot.command("profile", async (ctx) => {
+  try {
+    if (!ctx.from) {
+      await ctx.reply("⚠️ Не удалось идентифицировать пользователя");
+      return;
+    }
+    
+    const telegramId = ctx.from.id;
+    logger.info(`Получена команда /profile от пользователя ${telegramId}`);
+    
+    // Запрашиваем данные пользователя
+    const userRepository = new UserRepository();
+    const user = await userRepository.findByTelegramId(telegramId);
+    
+    if (!user) {
+      await ctx.reply("⚠️ Вы не зарегистрированы в системе. Используйте /apply для подачи заявки.");
+      return;
+    }
+    
+    // Получаем данные о рейтинге
+    const ratingsDetails = await ratingService.getUserRatingsDetails(user.id);
+    
+    // Получаем информацию о последних заявках пользователя
+    const applicationRepository = new ApplicationRepository();
+    const applications = await applicationRepository.findAllApplicationsByUserId(user.id);
+    let applicationStatus = '';
+    
+    if (applications && applications.length > 0) {
+      // Берем самую последнюю заявку
+      const latestApp = applications[0];
+      // Добавляем информацию о статусе заявки (если она в активном состоянии)
+      if (latestApp && latestApp.status === ApplicationStatus.PENDING) {
+        applicationStatus = '\n📝 *У вас есть активная заявка на рассмотрении*';
+      } else if (latestApp && latestApp.status === ApplicationStatus.VOTING) {
+        applicationStatus = '\n🗳️ *Ваша заявка находится в процессе голосования*';
+      } else if (latestApp && latestApp.status === ApplicationStatus.REJECTED) {
+        applicationStatus = '\n❌ *Ваша последняя заявка была отклонена*';
+      }
+    }
+    
+    // Рассчитываем репутацию
+    const reputationScore = user.reputation;
+    
+    // Форматируем дату
+    const createdAtDate = new Date(user.createdAt);
+    const joinDate = formatDate(createdAtDate);
+    
+    // Формируем красивое сообщение с профилем
+    let message = `📊 *Ваш профиль:*\n\n`;
+    
+    // Информация о пользователе
+    message += `👤 Telegram: @${user.username ? user.username.replace(/_/g, '\\_') : `user_${telegramId}`}\n`;
+    message += `🎮 Minecraft: ${user.minecraftNickname.replace(/_/g, '\\_')}\n`;
+    message += `📅 Дата вступления: ${joinDate}`;
+    
+    // Добавляем информацию о заявке, если она есть
+    if (applicationStatus) {
+      message += applicationStatus;
+    }
+    
+    // Статистика рейтинга
+    message += `\n\n*Статистика рейтинга:*\n`;
+    message += `⭐️ Репутация: ${reputationScore}\n`;
+    message += `👍 Положительные оценки: ${ratingsDetails.positiveCount}\n`;
+    message += `👎 Отрицательные оценки: ${ratingsDetails.negativeCount}\n`;
+    message += `📊 Всего получено оценок: ${ratingsDetails.positiveCount + ratingsDetails.negativeCount}\n`;
+    message += `✍️ Выдано оценок: ${user.totalRatingsGiven || 0}\n`;
+    
+    // Отправляем сообщение
+    await ctx.reply(message, { parse_mode: "Markdown" });
+    
+  } catch (error) {
+    logger.error("🔴 Критическая ошибка в команде /profile:", error);
+    try {
+      await ctx.reply("❌ Произошла ошибка. Попробуйте позже.");
+    } catch (replyError) {
+      logger.error("Не удалось отправить сообщение об ошибке:", replyError);
+    }
+  }
+});
+
+bot.command("viewprofile", async (ctx) => {
+  try {
+    if (!ctx.from) {
+      await ctx.reply("⚠️ Не удалось идентифицировать пользователя");
+      return;
+    }
+    
+    logger.info(`Получена команда /viewprofile от пользователя ${ctx.from.id}`);
+    
+    // Получаем список всех пользователей через репозиторий
+    const userRepository = new UserRepository();
+    const members = await userRepository.findAllMembers();
+    
+    if (!members || members.length === 0) {
+      await ctx.reply("👥 Активных участников не найдено.");
+      return;
+    }
+    
+    // Создаем клавиатуру для выбора пользователя
+    const keyboard = new InlineKeyboard();
+    
+    // Добавляем по 2 пользователя в ряд
+    for (let i = 0; i < members.length; i += 2) {
+      const firstMember = members[i];
+      const secondMember = i + 1 < members.length ? members[i + 1] : null;
+      
+      if (firstMember) {
+        keyboard.text(firstMember.minecraftNickname, `view_profile_${firstMember.id}`);
+      }
+      
+      if (secondMember) {
+        keyboard.text(secondMember.minecraftNickname, `view_profile_${secondMember.id}`);
+      }
+      
+      keyboard.row();
+    }
+    
+    await ctx.reply("👥 Выберите пользователя для просмотра профиля:", { reply_markup: keyboard });
+    
+  } catch (error) {
+    logger.error("Ошибка в команде /viewprofile:", error);
+    await ctx.reply("❌ Произошла ошибка при получении списка пользователей.");
+  }
+});
+
+bot.command("members", async (ctx) => {
+  try {
+    if (!ctx.from) {
+      await ctx.reply("⚠️ Не удалось идентифицировать пользователя");
+      return;
+    }
+    
+    logger.info(`Получена команда /members от пользователя ${ctx.from.id}`);
+    
+    // Проверяем права пользователя
+    const userRepository = new UserRepository();
+    const user = await userRepository.findByTelegramId(ctx.from.id);
+    
+    if (!user) {
+      await ctx.reply("⚠️ Вы не зарегистрированы в системе. Используйте /apply для подачи заявки.");
+      return;
+    }
+    
+    // Только члены и администраторы могут оценивать других участников
+    if (user.role !== UserRole.MEMBER && user.role !== UserRole.ADMIN) {
+      await ctx.reply("⚠️ Только участники и администраторы могут просматривать и оценивать других участников.");
+      return;
+    }
+    
+    // Получаем список всех участников
+    try {
+      const members = await userRepository.findAllMembers();
+      
+      if (!members || members.length === 0) {
+        await ctx.reply("👥 В системе пока нет активных участников с ролью MEMBER или ADMIN. Пожалуйста, попробуйте позже.");
+        return;
+      }
+      
+      // Создаем клавиатуру для выбора пользователя
+      const keyboard = new InlineKeyboard();
+      
+      // Добавляем по 2 пользователя в ряд
+      for (let i = 0; i < members.length; i += 2) {
+        const firstMember = members[i];
+        const secondMember = i + 1 < members.length ? members[i + 1] : null;
+        
+        if (firstMember) {
+          // Используем имя пользователя Telegram, если есть, иначе имя Minecraft
+          const displayName = firstMember.username ? `@${firstMember.username}` : firstMember.minecraftNickname;
+          
+          // Добавляем индикатор репутации
+          const reputationIndicator = firstMember.reputation > 0 ? '⭐️' : 
+                                     firstMember.reputation < 0 ? '⚠️' : '➖';
+          
+          keyboard.text(`${reputationIndicator} ${displayName}`, `select_member_${firstMember.id}`);
+        }
+        
+        if (secondMember) {
+          const displayName = secondMember.username ? `@${secondMember.username}` : secondMember.minecraftNickname;
+          const reputationIndicator = secondMember.reputation > 0 ? '⭐️' : 
+                                     secondMember.reputation < 0 ? '⚠️' : '➖';
+          
+          keyboard.text(`${reputationIndicator} ${displayName}`, `select_member_${secondMember.id}`);
+        }
+        
+        keyboard.row();
+      }
+      
+      await ctx.reply("📊 *Список участников для оценки*\n\nВыберите пользователя, чтобы поставить ему оценку:", {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      });
+    } catch (error) {
+      logger.error("Ошибка при получении списка участников:", error);
+      await ctx.reply("❌ Произошла ошибка при получении списка участников. Пожалуйста, попробуйте позже.");
+    }
+  } catch (error) {
+    logger.error("Ошибка в команде /members:", error);
+    await ctx.reply("❌ Произошла ошибка при обработке команды. Пожалуйста, попробуйте позже.");
+  }
+});
+
+// =====================================================
+// Конец прямой регистрации обработчиков
+// =====================================================
 
 // Добавляем middleware для работы с сессиями
 bot.use(session({
   initial: (): SessionData => ({})
 }));
 
-// Добавляем перехватчик всех обновлений для отладки
+// Регистрируем обработчики команд основного функционала
+bot.use(botController);
+bot.use(applicationController);
+bot.use(adminController);
+bot.use(profileController);
+// Не регистрируем ratingController, чтобы избежать конфликтов
+
+// Только после регистрации всех прямых команд добавляем 
+// перехватчик для отладки (чтобы он не блокировал выполнение команд)
 bot.use(async (ctx, next) => {
   let updateType = 'unknown';
   if (ctx.message) updateType = 'message';
@@ -67,128 +306,394 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
-// Прямая регистрация команды /profile с передачей в controller
-bot.command('profile', async (ctx) => {
-  logger.info('🔄 Получена команда /profile в глобальном обработчике - перенаправление в контроллер');
-  // Создаем экземпляр ProfileService только для этого вызова
-  const profileService = new ProfileService();
-  const userRepository = new UserRepository();
-  const applicationRepository = new ApplicationRepository();
-  
+// Обработчик колбэка для просмотра профиля
+bot.callbackQuery(/^view_profile_(\d+)$/, async (ctx) => {
   try {
-    if (!ctx.from) {
-      logger.error('Пользователь не определен в контексте');
-      await ctx.reply('❌ Не удалось определить пользователя');
-      return;
-    }
+    await ctx.answerCallbackQuery();
     
-    const telegramId = ctx.from.id;
-    logger.info(`Запрос профиля для пользователя с Telegram ID: ${telegramId}`);
-
-    // Проверяем, зарегистрирован ли пользователь
-    const user = await userRepository.findByTelegramId(telegramId);
+    const targetUserId = parseInt(ctx.match[1] || '0');
     
-    // Безопасное логирование объекта пользователя
-    if (user) {
-      logger.info('Пользователь найден в базе данных');
-      logger.info(`Имя пользователя: ${user.username}, роль: ${user.role}`);
-    } else {
-      logger.info('Пользователь не найден в базе данных');
-    }
+    // Получаем пользователя по ID
+    const userRepository = new UserRepository();
+    const user = await userRepository.findById(targetUserId);
     
     if (!user) {
-      await ctx.reply('❌ Вы не зарегистрированы в системе. Пожалуйста, подайте заявку на вступление командой /apply');
+      await ctx.reply("⚠️ Пользователь не найден.");
       return;
     }
     
-    // Получаем профиль пользователя
-    const profile = await profileService.getProfile(telegramId);
+    // Получаем детальную информацию о рейтинге
+    const ratingsDetails = await ratingService.getUserRatingsDetails(targetUserId);
     
-    // Безопасное логирование
-    if (profile) {
-      logger.info('Профиль пользователя найден');
-      logger.info(`Никнейм: ${profile.nickname}, Minecraft: ${profile.minecraft_username || 'не указан'}`);
-    } else {
-      logger.info('Профиль пользователя не найден');
-    }
+    const roleName = {
+      [UserRole.ADMIN]: 'Администратор',
+      [UserRole.MEMBER]: 'Участник',
+      [UserRole.APPLICANT]: 'Заявитель'
+    }[user.role];
     
-    if (!profile) {
-      await ctx.reply('❌ Профиль не найден. Возможно, вы еще не являетесь участником сообщества.');
-      return;
-    }
-
-    // Получаем историю оценок
-    const ratingHistory = await profileService.getRatingHistory(profile.user_id);
+    let message = `👤 *Профиль пользователя*\n\n` +
+                 `*Никнейм:* ${user.minecraftNickname}\n` +
+                 `*Роль:* ${roleName}\n` +
+                 `*Репутация:* ${user.reputation > 0 ? '👍 ' : ''}${user.reputation < 0 ? '👎 ' : ''}${user.reputation}\n` +
+                 `*Положительных оценок:* ${ratingsDetails.positiveCount}\n` +
+                 `*Отрицательных оценок:* ${ratingsDetails.negativeCount}\n` +
+                 `*Дата регистрации:* ${user.createdAt.toLocaleDateString()}\n`;
     
-    const reputationScore = profile.positive_ratings_received - profile.negative_ratings_received;
-
-    // Получаем последние заявки пользователя (если есть)
-    // Сначала получаем ID пользователя из профиля
-    const userId = profile.user_id;
-    const applications = await applicationRepository.findAllApplicationsByUserId(userId);
-    let applicationStatus = '';
+    // Создаем клавиатуру для оценки участника
+    const keyboard = new InlineKeyboard()
+      .text("👍 Респект", `rate_positive_${user.id}`)
+      .text("👎 Жалоба", `rate_negative_${user.id}`);
     
-    if (applications && applications.length > 0) {
-      // Берем самую последнюю заявку (первую в массиве)
-      const latestApp = applications[0];
-      // Добавляем информацию о статусе заявки (если она в активном состоянии)
-      if (latestApp && latestApp.status === ApplicationStatus.PENDING) {
-        applicationStatus = '\n📝 *У вас есть активная заявка на рассмотрении*';
-      } else if (latestApp && latestApp.status === ApplicationStatus.VOTING) {
-        applicationStatus = '\n🗳️ *Ваша заявка находится в процессе голосования*';
-      } else if (latestApp && latestApp.status === ApplicationStatus.REJECTED) {
-        applicationStatus = '\n❌ *Ваша последняя заявка была отклонена*';
-      }
-    }
+    await ctx.reply(message, { 
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
     
-    // Формируем сообщение с информацией о профиле
-    let message = `📊 *Ваш профиль:*\n\n`;
-    message += `👤 Telegram: @${user.username ? user.username.replace(/_/g, '\\_') : 'неизвестно'}\n`;
-    if (profile.minecraft_username) {
-      message += `🎮 Minecraft: ${profile.minecraft_username.replace(/_/g, '\\_')}\n`;
-    }
-    message += `📅 Дата вступления: ${formatDate(profile.join_date)}`;
-    
-    // Добавляем информацию о заявке, если она есть
-    if (applicationStatus) {
-      message += applicationStatus;
-    }
-    
-    message += `\n\n*Статистика рейтинга:*\n`;
-    message += `⭐️ Репутация: ${reputationScore}\n`;
-    message += `👍 Положительные оценки: ${profile.positive_ratings_received}\n`;
-    message += `👎 Отрицательные оценки: ${profile.negative_ratings_received}\n`;
-    message += `📊 Всего получено оценок: ${profile.total_ratings_received}\n`;
-    message += `✍️ Выдано оценок: ${profile.total_ratings_given}\n\n`;
-
-    // Добавляем последние оценки, если они есть
-    if (ratingHistory && ratingHistory.length > 0) {
-      message += `*Последние оценки:*\n`;
-      ratingHistory.slice(0, 5).forEach(rating => {
-        const icon = rating.isPositive ? '👍' : '👎';
-        message += `${icon} от ${rating.raterNickname}`;
-        if (rating.reason) {
-          message += `: ${rating.reason}`;
-        }
-        message += '\n';
-      });
-    }
-
-    await ctx.reply(message, { parse_mode: 'Markdown' });
-    logger.info('Сообщение с профилем успешно отправлено');
   } catch (error) {
-    logger.error('Ошибка в обработке команды /profile:', error);
-    console.error('Подробная ошибка:', error);
-    await ctx.reply('❌ Произошла ошибка при получении профиля');
+    logger.error('Ошибка при просмотре профиля:', error);
+    await ctx.reply('❌ Произошла ошибка при просмотре профиля');
   }
 });
 
-// Регистрируем обработчики команд
-bot.use(botController);
-bot.use(applicationController);
-bot.use(adminController);
-bot.use(profileController); // Регистрируем контроллер профиля
-bot.use(ratingController);
+// Обработчики для оценки пользователей
+bot.callbackQuery(/^rate_(positive|negative)_(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    
+    // Получаем информацию о пользователе, который совершает оценку
+    if (!ctx.from) {
+      await ctx.reply("⚠️ Не удалось идентифицировать отправителя.");
+      return;
+    }
+    
+    const fromUserTelegramId = ctx.from.id.toString();
+    const userRepository = new UserRepository();
+    
+    // Находим пользователя, который ставит оценку
+    // Преобразуем строку в число
+    const numericTelegramId = parseInt(fromUserTelegramId);
+    const fromUser = await userRepository.findByTelegramId(numericTelegramId);
+    
+    if (!fromUser) {
+      await ctx.reply("⚠️ Вы не зарегистрированы в системе.");
+      return;
+    }
+    
+    // Проверяем, может ли пользователь голосовать
+    if (fromUser.role !== UserRole.MEMBER && fromUser.role !== UserRole.ADMIN) {
+      await ctx.reply("⚠️ Только участники и администраторы могут ставить оценки.");
+      return;
+    }
+    
+    // Получаем тип оценки и ID целевого пользователя
+    const ratingType = ctx.match[1] === 'positive' ? RatingType.POSITIVE : RatingType.NEGATIVE;
+    const targetUserId = parseInt(ctx.match[2] || '0');
+    
+    // Проверяем, что пользователь не оценивает сам себя
+    if (fromUser.id === targetUserId) {
+      await ctx.reply("⚠️ Вы не можете оценить сами себя.");
+      return;
+    }
+    
+    // Находим целевого пользователя
+    const targetUser = await userRepository.findById(targetUserId);
+    
+    if (!targetUser) {
+      await ctx.reply("⚠️ Целевой пользователь не найден.");
+      return;
+    }
+    
+    // Сохраняем информацию в сессии
+    ctx.session.ratingState = {
+      targetUserId: targetUserId,
+      ratingType: ratingType,
+      step: 'awaiting_reason'
+    };
+    
+    // Создаем клавиатуру для отмены
+    const keyboard = new InlineKeyboard()
+      .text("❌ Отменить", "cancel_rating");
+    
+    // Запрашиваем причину оценки
+    const prompt = ratingType === RatingType.POSITIVE
+      ? "👍 Пожалуйста, укажите причину положительной оценки:"
+      : "👎 Пожалуйста, укажите причину отрицательной оценки:";
+    
+    await ctx.reply(prompt, { reply_markup: keyboard });
+    
+  } catch (error) {
+    logger.error('Ошибка при обработке запроса на оценку:', error);
+    await ctx.reply('❌ Произошла ошибка при обработке запроса на оценку');
+  }
+});
+
+// Обработчик отмены оценки
+bot.callbackQuery("cancel_rating", async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    
+    // Сбрасываем состояние оценки
+    ctx.session.ratingState = undefined;
+    
+    await ctx.reply("✅ Оценка отменена.");
+    
+    // Возвращаемся к списку пользователей
+    const keyboard = new InlineKeyboard()
+      .text("👥 Вернуться к списку пользователей", "return_to_members");
+    
+    await ctx.reply("Что вы хотите сделать дальше?", { reply_markup: keyboard });
+    
+  } catch (error) {
+    logger.error('Ошибка при отмене оценки:', error);
+    await ctx.reply('❌ Произошла ошибка при отмене оценки');
+  }
+});
+
+// Обработчик возврата к списку участников
+bot.callbackQuery("return_to_members", async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    logger.info("Запрос на возврат к списку участников");
+    
+    if (!ctx.from) {
+      await ctx.reply("⚠️ Не удалось идентифицировать пользователя");
+      return;
+    }
+    
+    // Получаем список всех участников
+    const userRepository = new UserRepository();
+    const members = await userRepository.findAllMembers();
+    
+    logger.info(`Получено ${members ? members.length : 0} участников`);
+    
+    if (!members || members.length === 0) {
+      await ctx.reply("👥 Активных участников не найдено.");
+      return;
+    }
+    
+    // Создаем клавиатуру для выбора пользователя
+    const keyboard = new InlineKeyboard();
+    
+    // Добавляем по 2 пользователя в ряд
+    for (let i = 0; i < members.length; i += 2) {
+      const firstMember = members[i];
+      const secondMember = i + 1 < members.length ? members[i + 1] : null;
+      
+      if (firstMember) {
+        // Используем имя пользователя Telegram, если есть, иначе имя Minecraft
+        const displayName = firstMember.username ? `@${firstMember.username}` : firstMember.minecraftNickname;
+        
+        // Добавляем индикатор репутации
+        const reputationIndicator = firstMember.reputation > 0 ? '⭐️' : 
+                                   firstMember.reputation < 0 ? '⚠️' : '➖';
+        
+        keyboard.text(`${reputationIndicator} ${displayName}`, `select_member_${firstMember.id}`);
+      }
+      
+      if (secondMember) {
+        const displayName = secondMember.username ? `@${secondMember.username}` : secondMember.minecraftNickname;
+        const reputationIndicator = secondMember.reputation > 0 ? '⭐️' : 
+                                   secondMember.reputation < 0 ? '⚠️' : '➖';
+        
+        keyboard.text(`${reputationIndicator} ${displayName}`, `select_member_${secondMember.id}`);
+      }
+      
+      keyboard.row();
+    }
+    
+    logger.info("Отправляем сообщение со списком участников");
+    await ctx.editMessageText("📊 *Список участников для оценки*\n\nВыберите пользователя, чтобы поставить ему оценку:", {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+    logger.info("Сообщение со списком участников успешно отправлено");
+    
+  } catch (error) {
+    logger.error('Ошибка при возврате к списку участников:', error);
+    await ctx.reply('❌ Произошла ошибка при получении списка участников.');
+  }
+});
+
+// Обработчик сообщений для завершения процесса оценки
+bot.on("message:text", async (ctx) => {
+  try {
+    // Проверяем, находится ли пользователь в процессе оценки
+    if (ctx.session.ratingState && ctx.session.ratingState.step === 'awaiting_reason') {
+      // Получаем информацию о пользователе
+      if (!ctx.from) {
+        await ctx.reply("⚠️ Не удалось идентифицировать отправителя.");
+        return;
+      }
+      
+      const fromUserTelegramId = ctx.from.id.toString();
+      const userRepository = new UserRepository();
+      
+      // Находим пользователя, который ставит оценку
+      // Преобразуем строку в число
+      const numericTelegramId = parseInt(fromUserTelegramId);
+      const fromUser = await userRepository.findByTelegramId(numericTelegramId);
+      
+      if (!fromUser) {
+        await ctx.reply("⚠️ Вы не зарегистрированы в системе.");
+        ctx.session.ratingState = undefined;
+        return;
+      }
+      
+      // Получаем данные из сессии
+      const targetUserId = ctx.session.ratingState.targetUserId;
+      const ratingType = ctx.session.ratingState.ratingType;
+      const reason = ctx.message.text;
+      
+      if (!reason || reason.trim().length < 5) {
+        await ctx.reply("⚠️ Причина должна содержать не менее 5 символов.");
+        return;
+      }
+      
+      // Создаем рейтинг с преобразованием типа
+      const isPositive = ratingType === RatingType.POSITIVE;
+      await ratingService.addRating(fromUser.id, targetUserId, isPositive, reason);
+      
+      // Сбрасываем состояние
+      ctx.session.ratingState = undefined;
+      
+      // Отправляем сообщение об успешной оценке
+      const successMessage = ratingType === RatingType.POSITIVE
+        ? "👍 Вы успешно поставили положительную оценку."
+        : "👎 Вы успешно поставили отрицательную оценку.";
+      
+      await ctx.reply(successMessage);
+      
+      // Создаем клавиатуру для возврата к просмотру профиля
+      const keyboard = new InlineKeyboard()
+        .text("👤 Просмотреть обновленный профиль", `view_profile_${targetUserId}`)
+        .row()
+        .text("👥 Вернуться к списку участников", "return_to_members");
+      
+      await ctx.reply("Что вы хотите сделать дальше?", { reply_markup: keyboard });
+    }
+  } catch (error) {
+    logger.error('Ошибка при обработке причины оценки:', error);
+    await ctx.reply('❌ Произошла ошибка при обработке причины оценки');
+    ctx.session.ratingState = undefined;
+  }
+});
+
+// Обработчик выбора участника из списка
+bot.callbackQuery(/^select_member_(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    
+    const targetUserId = parseInt(ctx.match[1] || '0');
+    logger.info(`Выбран пользователь с ID: ${targetUserId}`);
+    
+    // Получаем пользователя по ID
+    const userRepository = new UserRepository();
+    const targetUser = await userRepository.findById(targetUserId);
+    
+    if (!targetUser) {
+      logger.warn(`Пользователь с ID ${targetUserId} не найден`);
+      await ctx.reply("⚠️ Пользователь не найден.");
+      return;
+    }
+    
+    logger.info(`Найден пользователь: id=${targetUser.id}, username=${targetUser.username}, minecraft=${targetUser.minecraftNickname}`);
+    
+    // Получаем детальную информацию о рейтинге
+    logger.info(`Запрашиваем информацию о рейтинге для пользователя с ID: ${targetUserId}`);
+    const ratingsDetails = await ratingService.getUserRatingsDetails(targetUserId);
+    logger.info(`Получена информация о рейтинге: позитивных=${ratingsDetails.positiveCount}, негативных=${ratingsDetails.negativeCount}`);
+    
+    // Формируем имя пользователя для отображения
+    const displayName = targetUser.username ? `@${targetUser.username}` : targetUser.minecraftNickname;
+    
+    // Создаем сообщение с информацией о пользователе
+    let message = `👤 *Информация о пользователе:*\n\n`;
+    
+    if (targetUser.username) {
+      message += `*Telegram:* @${targetUser.username.replace(/_/g, '\\_')}\n`;
+    }
+    
+    message += `*Minecraft:* ${targetUser.minecraftNickname}\n`;
+    message += `*Репутация:* ${targetUser.reputation} `;
+    
+    // Добавляем индикатор репутации
+    if (targetUser.reputation > 0) {
+      message += "👍";
+    } else if (targetUser.reputation < 0) {
+      message += "👎";
+    }
+    
+    message += `\n*Положительных оценок:* ${ratingsDetails.positiveCount}\n`;
+    message += `*Отрицательных оценок:* ${ratingsDetails.negativeCount}\n\n`;
+    message += `*Выберите действие:*`;
+    
+    // Создаем клавиатуру для действий с пользователем
+    const keyboard = new InlineKeyboard()
+      .text("👍 Положительная оценка", `rate_positive_${targetUser.id}`)
+      .row()
+      .text("👎 Отрицательная оценка", `rate_negative_${targetUser.id}`)
+      .row()
+      .text("📊 История оценок", `show_ratings_${targetUser.id}`)
+      .row()
+      .text("« Назад к списку", "return_to_members");
+    
+    logger.info("Отправляем сообщение с информацией о пользователе");
+    await ctx.editMessageText(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+    logger.info("Сообщение с информацией о пользователе успешно отправлено");
+    
+  } catch (error) {
+    logger.error('Ошибка при выборе участника:', error);
+    await ctx.reply('❌ Произошла ошибка при выборе участника');
+  }
+});
+
+// Обработчик для показа истории оценок
+bot.callbackQuery(/^show_ratings_(\d+)$/, async (ctx) => {
+  try {
+    await ctx.answerCallbackQuery();
+    
+    const targetUserId = parseInt(ctx.match[1] || '0');
+    
+    // Получаем пользователя по ID
+    const userRepository = new UserRepository();
+    const targetUser = await userRepository.findById(targetUserId);
+    
+    if (!targetUser) {
+      await ctx.reply("⚠️ Пользователь не найден.");
+      return;
+    }
+    
+    // Получаем данные о рейтинге
+    const ratingsDetails = await ratingService.getUserRatingsDetails(targetUserId);
+    
+    // Создаем клавиатуру для возврата к профилю
+    const keyboard = new InlineKeyboard()
+      .text("« Назад к профилю", `select_member_${targetUserId}`)
+      .row()
+      .text("« Назад к списку", "return_to_members");
+    
+    // Формируем сообщение с информацией о рейтинге
+    let message = `📊 *Информация о рейтинге пользователя ${targetUser.minecraftNickname}:*\n\n`;
+    message += `👍 Положительных оценок: ${ratingsDetails.positiveCount}\n`;
+    message += `👎 Отрицательных оценок: ${ratingsDetails.negativeCount}\n`;
+    message += `⭐️ Репутация: ${targetUser.reputation}\n\n`;
+    
+    // Напоминание о возможности оценки
+    message += `Чтобы оценить пользователя, вернитесь к его профилю и нажмите кнопку "Положительная оценка" или "Отрицательная оценка".`;
+    
+    await ctx.reply(message, {
+      parse_mode: "Markdown",
+      reply_markup: keyboard
+    });
+    
+  } catch (error) {
+    logger.error('Ошибка при получении информации о рейтинге:', error);
+    await ctx.reply('❌ Произошла ошибка при получении информации о рейтинге');
+  }
+});
 
 // Обработка ошибок
 bot.catch((err) => {

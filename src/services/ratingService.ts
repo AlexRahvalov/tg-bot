@@ -232,16 +232,31 @@ export class RatingService {
     
     // Считаем репутацию (положительные +1, отрицательные -1)
     let reputation = 0;
+    let positiveCount = 0;
+    let negativeCount = 0;
     
     for (const rating of ratings) {
-      reputation += rating.is_positive ? 1 : -1;
+      if (rating.is_positive) {
+        reputation += 1;
+        positiveCount += 1;
+      } else {
+        reputation -= 1;
+        negativeCount += 1;
+      }
     }
     
     // Обновляем репутацию пользователя в БД
     await executeQuery(
-      `UPDATE users SET reputation = ? WHERE id = ?`,
-      [reputation, userId]
+      `UPDATE users 
+       SET reputation = ?,
+           positive_ratings_received = ?,
+           negative_ratings_received = ?,
+           total_ratings_received = ?
+       WHERE id = ?`,
+      [reputation, positiveCount, negativeCount, ratings.length, userId]
     );
+    
+    logger.info(`Обновлена репутация пользователя ${userId}: ${reputation} (+ ${positiveCount}, - ${negativeCount})`);
   }
   
   /**
@@ -350,27 +365,16 @@ export class RatingService {
    */
   async getUserRatingsDetails(userId: number): Promise<{ positiveCount: number; negativeCount: number }> {
     try {
-      // Получаем все оценки пользователя
-      const ratings = await executeQuery(
-        `SELECT is_positive FROM ratings WHERE target_user_id = ?`,
-        [userId]
-      );
+      // Получаем информацию о пользователе
+      const user = await this.userRepository.findById(userId);
       
-      // Считаем количество положительных и отрицательных оценок
-      let positiveCount = 0;
-      let negativeCount = 0;
-      
-      for (const rating of ratings) {
-        if (rating.is_positive) {
-          positiveCount++;
-        } else {
-          negativeCount++;
-        }
-      }
-      
-      return { positiveCount, negativeCount };
+      // Берем количество оценок напрямую из таблицы пользователей
+      return { 
+        positiveCount: user.positiveRatingsReceived || 0, 
+        negativeCount: user.negativeRatingsReceived || 0 
+      };
     } catch (error) {
-      logger.error('Ошибка при получении детальной информации о рейтинге пользователя', error);
+      logger.error(`Ошибка при получении детальной информации о рейтинге пользователя ${userId}:`, error);
       return { positiveCount: 0, negativeCount: 0 };
     }
   }

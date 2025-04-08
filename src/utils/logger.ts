@@ -34,6 +34,30 @@ class Logger {
   }
   
   /**
+   * Безопасная сериализация объектов, включая значения BigInt
+   * @param obj Объект для сериализации
+   * @returns Строковое представление объекта
+   */
+  private safeStringify(obj: any): string {
+    if (obj === undefined) return 'undefined';
+    if (obj === null) return 'null';
+    if (typeof obj !== 'object') return String(obj);
+    
+    try {
+      return JSON.stringify(obj, (_, value) => {
+        // Преобразуем BigInt в строку
+        if (typeof value === 'bigint') {
+          return value.toString();
+        }
+        return value;
+      });
+    } catch (error) {
+      // Если JSON.stringify не сработал, возвращаем простое представление
+      return `[Object ${obj.constructor?.name || typeof obj}]`;
+    }
+  }
+  
+  /**
    * Запись в файл лога
    */
   private writeToFile(level: string, message: string): void {
@@ -59,7 +83,7 @@ class Logger {
    */
   error(message: any, ...optionalParams: any[]): void {
     if (this.level >= LogLevel.ERROR) {
-      const errorMessage = `${message} ${optionalParams.map(p => JSON.stringify(p)).join(' ')}`;
+      const errorMessage = `${message} ${optionalParams.map(p => this.safeStringify(p)).join(' ')}`;
       console.error(`[ERROR] ${new Date().toISOString()}:`, message, ...optionalParams);
       this.writeToFile('ERROR', errorMessage);
     }
@@ -72,7 +96,7 @@ class Logger {
    */
   warn(message: any, ...optionalParams: any[]): void {
     if (this.level >= LogLevel.WARN) {
-      const warnMessage = `${message} ${optionalParams.map(p => JSON.stringify(p)).join(' ')}`;
+      const warnMessage = `${message} ${optionalParams.map(p => this.safeStringify(p)).join(' ')}`;
       console.warn(`[WARN] ${new Date().toISOString()}:`, message, ...optionalParams);
       this.writeToFile('WARN', warnMessage);
     }
@@ -85,7 +109,7 @@ class Logger {
    */
   info(message: any, ...optionalParams: any[]): void {
     if (this.level >= LogLevel.INFO) {
-      const infoMessage = `${message} ${optionalParams.map(p => JSON.stringify(p)).join(' ')}`;
+      const infoMessage = `${message} ${optionalParams.map(p => this.safeStringify(p)).join(' ')}`;
       console.info(`[INFO] ${new Date().toISOString()}:`, message, ...optionalParams);
       this.writeToFile('INFO', infoMessage);
     }
@@ -98,7 +122,7 @@ class Logger {
    */
   debug(message: any, ...optionalParams: any[]): void {
     if (this.level >= LogLevel.DEBUG) {
-      const debugMessage = `${message} ${optionalParams.map(p => JSON.stringify(p)).join(' ')}`;
+      const debugMessage = `${message} ${optionalParams.map(p => this.safeStringify(p)).join(' ')}`;
       console.debug(`[DEBUG] ${new Date().toISOString()}:`, message, ...optionalParams);
       this.writeToFile('DEBUG', debugMessage);
     }
