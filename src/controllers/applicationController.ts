@@ -1,5 +1,5 @@
 import { Bot, Composer, InlineKeyboard } from "grammy";
-import type { MyContext } from "../index";
+import type { MyContext } from "../models/sessionTypes";
 import { handleError } from "../utils/errorHandler";
 import { logger } from "../utils/logger";
 import { UserRepository } from "../db/repositories/userRepository";
@@ -39,6 +39,70 @@ function escapeMarkdown(text: string): string {
 // Команда для подачи заявки
 applicationController.command("apply", handleError(async (ctx: MyContext) => {
   if (!ctx.from) return;
+  
+  const telegramId = ctx.from.id;
+  const userRepository = new UserRepository();
+  
+  // Проверяем, существует ли пользователь и его статус
+  const user = await userRepository.findByTelegramId(telegramId);
+  
+  if (user) {
+    // Проверяем, является ли пользователь уже участником
+    if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
+      await ctx.reply(
+        '⚠️ Вы уже являетесь участником сервера.\n\n' +
+        'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
+      );
+      return;
+    }
+    
+    // Проверяем, есть ли уже одобренная заявка
+    const applicationRepository = new ApplicationRepository();
+    const applications = await applicationRepository.findAllApplicationsByUserId(user.id);
+    
+    const hasApprovedApplication = applications.some((app: Application) => app.status === ApplicationStatus.APPROVED);
+    if (hasApprovedApplication) {
+      await ctx.reply(
+        '⚠️ У вас уже есть одобренная заявка.\n\n' +
+        'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
+      );
+      return;
+    }
+    
+    // Проверяем, есть ли активные заявки
+    const activeApplications = await applicationRepository.findActiveApplicationsByUserId(user.id);
+    if (activeApplications.length > 0) {
+      await ctx.reply(
+        '⚠️ У вас уже есть активная заявка.\n\n' +
+        'Дождитесь рассмотрения текущей заявки или обратитесь к администраторам сервера.'
+      );
+      return;
+    }
+  }
+  
+  // Если все проверки пройдены, начинаем процесс подачи заявки
+  await ctx.reply(
+    '📝 Начинаем процесс подачи заявки на вступление.\n\n' +
+    'Пожалуйста, укажите ваш никнейм в Minecraft:'
+  );
+  
+  // Помечаем сообщение как обработанное
+  if (ctx.session) {
+    ctx.session.__processed = true;
+    // Сохраняем шаг в сессии
+    ctx.session.step = 'waiting_nickname';
+    ctx.session.form = {};
+  }
+}));
+
+// Добавляем обработчик для кнопки "Подать заявку" 
+applicationController.hears("📝 Подать заявку", handleError(async (ctx: MyContext) => {
+  if (!ctx.from) return;
+  
+  // Помечаем сообщение как обработанное
+  if (ctx.session) {
+    ctx.session.__processed = true;
+  }
   
   const telegramId = ctx.from.id;
   const userRepository = new UserRepository();
@@ -155,126 +219,28 @@ applicationController.callbackQuery('start_application', handleError(async (ctx)
   }
 }));
 
-// Обработка кнопки подачи заявки в главном меню
-botController.hears("📝 Подать заявку", async (ctx: MyContext) => {
-  if (!ctx.from) return;
-  
-  const telegramId = ctx.from.id;
-  const userRepository = new UserRepository();
-  
-  try {
-    // Проверяем, существует ли пользователь и его статус
-    const user = await userRepository.findByTelegramId(telegramId);
-    
-    if (user) {
-      // Проверяем, является ли пользователь уже участником
-      if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
-        await ctx.reply(
-          '⚠️ Вы уже являетесь участником сервера.\n\n' +
-          'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
-        );
-        return;
-      }
-      
-      // Проверяем, есть ли уже одобренная заявка
-      const applicationRepository = new ApplicationRepository();
-      const applications = await applicationRepository.findAllApplicationsByUserId(user.id);
-      
-      const hasApprovedApplication = applications.some((app: Application) => app.status === ApplicationStatus.APPROVED);
-      if (hasApprovedApplication) {
-        await ctx.reply(
-          '⚠️ У вас уже есть одобренная заявка.\n\n' +
-          'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
-        );
-        return;
-      }
-      
-      // Проверяем, есть ли активные заявки
-      const activeApplications = await applicationRepository.findActiveApplicationsByUserId(user.id);
-      if (activeApplications.length > 0) {
-        await ctx.reply(
-          '⚠️ У вас уже есть активная заявка.\n\n' +
-          'Дождитесь рассмотрения текущей заявки или обратитесь к администраторам сервера.'
-        );
-        return;
-      }
-    }
-    
-    // Если все проверки пройдены, начинаем процесс подачи заявки
-    await ctx.reply(
-      '📝 Начинаем процесс подачи заявки на вступление.\n\n' +
-      'Пожалуйста, укажите ваш никнейм в Minecraft:'
-    );
-    
-    // Сохраняем шаг в сессии
-    if (ctx.session) {
-      ctx.session.step = 'waiting_nickname';
-      ctx.session.form = {};
-    }
-  } catch (error) {
-    logger.error("Ошибка при обработке кнопки подачи заявки:", error);
-    await ctx.reply("Произошла ошибка. Пожалуйста, попробуйте позже.");
+// Добавляем приоритетный обработчик для защиты процесса подачи заявки от перехвата другими контроллерами
+applicationController.use(async (ctx, next) => {
+  // Помечаем сообщение как обработанное если это часть процесса подачи заявки
+  if (ctx.message && ctx.session?.step && 
+     (ctx.session.step === 'waiting_nickname' || 
+      ctx.session.step === 'waiting_reason' || 
+      ctx.session.step === 'waiting_question' ||
+      ctx.session.step === 'waiting_answer')) {
+    // Помечаем, что это сообщение часть процесса подачи заявки
+    ctx.session.__processed = true;
   }
+  
+  // Передаем управление дальше
+  return await next();
 });
-
-// Команда для проверки статуса заявки
-applicationController.command("status", handleError(async (ctx: MyContext) => {
-  if (!ctx.from) return;
-  
-  const telegramId = ctx.from.id;
-  const userRepository = new UserRepository();
-  const applicationRepository = new ApplicationRepository();
-  
-  try {
-    // Проверяем, существует ли пользователь
-    const user = await userRepository.findByTelegramId(telegramId);
-    
-    if (!user) {
-      await ctx.reply(
-        '⚠️ Вы еще не подали заявку.\n\n' +
-        'Чтобы подать заявку, используйте команду /apply'
-      );
-      return;
-    }
-    
-    // Получаем активные заявки пользователя
-    const activeApplications = await applicationRepository.findActiveApplicationsByUserId(user.id);
-    
-    if (activeApplications.length === 0) {
-      // Проверяем, является ли пользователь членом сообщества
-      if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
-        await ctx.reply(
-          '✅ Вы являетесь членом сообщества и имеете доступ к серверу!\n\n' +
-          'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
-        );
-        return;
-      }
-      
-      await ctx.reply(
-        '⚠️ У вас нет активных заявок.\n\n' +
-        'Возможно, ваша заявка была уже рассмотрена или вы еще не подавали заявку.\n' +
-        'Чтобы подать заявку, используйте команду /apply'
-      );
-      return;
-    }
-    
-    // Выводим информацию о заявке
-    const application = activeApplications[0];
-    if (application) {
-      await messageService.sendApplicationStatus(ctx, application);
-    } else {
-      await ctx.reply('⚠️ Информация о заявке не найдена.');
-    }
-    
-  } catch (error) {
-    logger.error('Ошибка при обработке команды /status:', error);
-    await ctx.reply('😔 Произошла ошибка. Пожалуйста, попробуйте позже или обратитесь к администратору.');
-  }
-}));
 
 // Обработчик для получения никнейма в Minecraft
 applicationController.on('message', async (ctx, next) => {
   if (!ctx.message || !ctx.from || !ctx.message.text) return next();
+  
+  // Пропускаем команды, чтобы они обрабатывались их собственными обработчиками
+  if (ctx.message.text.startsWith('/')) return next();
   
   // Обрабатываем шаг ввода никнейма Minecraft
   if (ctx.session?.step === 'waiting_nickname') {
@@ -410,8 +376,7 @@ applicationController.callbackQuery('confirm_application', handleError(async (ct
     const mainKeyboard = await keyboardService.getMainKeyboard(ctx.from.id);
     await ctx.reply(
       '✅ Ваша заявка на вступление успешно отправлена!\n\n' +
-      'Администраторы рассмотрят её в ближайшее время. Вы получите уведомление, когда статус вашей заявки изменится.\n\n' +
-      'Вы можете проверить статус своей заявки с помощью команды /status',
+      'Администраторы рассмотрят её в ближайшее время. Вы получите уведомление, когда статус вашей заявки изменится.',
       { reply_markup: mainKeyboard }
     );
     

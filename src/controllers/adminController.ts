@@ -1,5 +1,5 @@
-import { Bot, Composer, InlineKeyboard } from "grammy";
-import type { MyContext } from "../index";
+import { Composer, InlineKeyboard } from "grammy";
+import type { MyContext } from "../models/sessionTypes";
 import { keyboardService } from "../services/keyboardService";
 import { handleErrorWithContext } from '../utils/errorHandler';
 import { UserRepository } from "../db/repositories/userRepository";
@@ -24,14 +24,50 @@ const adminController = new Composer<MyContext>();
 // Проверка прав администратора (middleware)
 const adminMiddleware = async (ctx: MyContext, next: () => Promise<void>) => {
   try {
-    if (!ctx.from) {
-      return await ctx.reply("⚠️ Не удалось определить пользователя.");
+    // Если сообщение уже обработано другим контроллером
+    if (ctx.session?.__processed) {
+      return await next();
     }
-
-    const user = await userRepository.findByTelegramId(ctx.from.id);
     
-    if (!user || user.role !== UserRole.ADMIN) {
-      return await ctx.reply("⚠️ У вас нет прав доступа к этой функции.");
+    // Пропускаем основные команды и обработчики для всех пользователей
+    if (ctx.message) {
+      if (ctx.message.text === "📝 Подать заявку" || 
+          ctx.message.text === "/apply" || 
+          ctx.message.text === "/start" ||
+          ctx.message.text === "/help" ||
+          ctx.message.text === "/status" ||
+          ctx.message.text === "ℹ️ Помощь" ||
+          ctx.message.text === "📋 О сервере" ||
+          ctx.message.text === "📊 Статус заявки") {
+        return await next();
+      }
+    }
+    
+    // Пропускаем обработку кнопок заявок
+    if (ctx.callbackQuery?.data) {
+      if (ctx.callbackQuery.data.startsWith('confirm_application') || 
+          ctx.callbackQuery.data.startsWith('cancel_application') || 
+          ctx.callbackQuery.data.startsWith('back_to_main') ||
+          ctx.callbackQuery.data.startsWith('show_application_') ||
+          ctx.callbackQuery.data.startsWith('start_application')) {
+        return await next();
+      }
+    }
+    
+    // Если команда непосредственно для админ-панели, проверяем права
+    if (ctx.message?.text === "/admin" || 
+        ctx.message?.text === "🛠️ Админ-панель" ||
+        (ctx.callbackQuery?.data && ctx.callbackQuery.data.startsWith('admin_'))) {
+      
+      if (!ctx.from) {
+        return await ctx.reply("⚠️ Не удалось определить пользователя.");
+      }
+      
+      const user = await userRepository.findByTelegramId(ctx.from.id);
+      
+      if (!user || user.role !== UserRole.ADMIN) {
+        return await ctx.reply("⚠️ У вас нет прав доступа к этой функции.");
+      }
     }
     
     await next();

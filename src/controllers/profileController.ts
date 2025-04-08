@@ -1,6 +1,6 @@
 import { Composer } from 'grammy';
 import { ProfileService } from '../services/profileService';
-import type { MyContext } from '../index';
+import type { MyContext } from '../models/sessionTypes';
 import { logger } from '../utils/logger';
 import { formatDate } from '../utils/stringUtils';
 import { UserRepository } from '../db/repositories/userRepository';

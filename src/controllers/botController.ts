@@ -1,9 +1,9 @@
 import { Composer, Bot, InlineKeyboard } from 'grammy';
-import type { MyContext } from '../index';
+import type { MyContext } from '../models/sessionTypes';
 import { keyboardService } from '../services/keyboardService';
 import { handleErrorWithContext } from '../utils/errorHandler';
 import { UserRepository } from '../db/repositories/userRepository';
-import { UserRole } from '../models/types';
+import { UserRole, ApplicationStatus } from '../models/types';
 import { logger } from '../utils/logger';
 import { messageService } from '../services/messageService';
 import { ApplicationRepository } from '../db/repositories/applicationRepository';
@@ -145,10 +145,20 @@ async function showAdminPanel(ctx: MyContext) {
 }
 
 // Обработка команд
-botController.command("start", async (ctx) => {
+botController.command("start", async (ctx, next) => {
   try {
+    // Проверяем, был ли ответ уже отправлен в applicationController
+    if (ctx.session?.__processed) {
+      return;
+    }
+    
     const keyboard = await keyboardService.getMainKeyboard(ctx.from?.id);
     await ctx.reply(messageService.getStartMessage(), { reply_markup: keyboard });
+    
+    // Помечаем сообщение как обработанное
+    if (ctx.session) {
+      ctx.session.__processed = true;
+    }
   } catch (error) {
     logger.error("Ошибка при обработке команды /start:", error);
     await ctx.reply("Произошла ошибка при запуске бота. Пожалуйста, попробуйте позже.");
@@ -210,9 +220,109 @@ botController.command("admin", async (ctx) => {
   }
 });
 
+// Добавляем обработчик команды status в botController
+botController.command("status", async (ctx) => {
+  try {
+    if (!ctx.from) return;
+    
+    const telegramId = ctx.from.id;
+    const userRepository = new UserRepository();
+    
+    // Проверяем, существует ли пользователь
+    const user = await userRepository.findByTelegramId(telegramId);
+    
+    if (!user) {
+      await ctx.reply(
+        '⚠️ Вы еще не подали заявку.\n\n' +
+        'Чтобы подать заявку, используйте команду /apply или кнопку "Подать заявку"'
+      );
+      return;
+    }
+    
+    // Проверяем статус пользователя
+    if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
+      await ctx.reply(
+        '✅ Вы являетесь членом сообщества и имеете доступ к серверу!\n\n' +
+        'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
+      );
+      return;
+    }
+    
+    // Проверяем, есть ли у пользователя активные заявки
+    const applicationRepository = new ApplicationRepository();
+    const activeApplications = await applicationRepository.findActiveApplicationsByUserId(user.id);
+    
+    if (activeApplications.length === 0) {
+      await ctx.reply(
+        '⚠️ У вас нет активных заявок.\n\n' +
+        'Возможно, ваша заявка была уже рассмотрена или вы еще не подавали заявку.\n' +
+        'Чтобы подать заявку, используйте команду /apply или кнопку "Подать заявку"'
+      );
+      return;
+    }
+    
+    // Отправляем статус заявки
+    if (activeApplications[0]) {
+      await messageService.sendApplicationStatus(ctx, activeApplications[0]);
+    } else {
+      await ctx.reply('⚠️ Информация о заявке не найдена.');
+    }
+  } catch (error) {
+    logger.error('Ошибка при проверке статуса заявки:', error);
+    await ctx.reply('😔 Произошла ошибка. Пожалуйста, попробуйте позже или обратитесь к администратору.');
+  }
+});
+
 // Обработка текстовых команд с кнопок
 botController.hears("📝 Подать заявку", async (ctx) => {
   try {
+    // Помечаем сообщение как обработанное
+    if (ctx.session) {
+      ctx.session.__processed = true;
+    }
+    
+    if (!ctx.from) return;
+    
+    const telegramId = ctx.from.id;
+    const userRepository = new UserRepository();
+    
+    // Проверяем, существует ли пользователь и его статус
+    const user = await userRepository.findByTelegramId(telegramId);
+    
+    if (user) {
+      // Проверяем, является ли пользователь уже участником
+      if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
+        await ctx.reply(
+          '⚠️ Вы уже являетесь участником сервера.\n\n' +
+          'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
+        );
+        return;
+      }
+      
+      // Проверяем, есть ли уже одобренная заявка
+      const applicationRepository = new ApplicationRepository();
+      const applications = await applicationRepository.findAllApplicationsByUserId(user.id);
+      
+      const hasApprovedApplication = applications.some((app) => app.status === ApplicationStatus.APPROVED);
+      if (hasApprovedApplication) {
+        await ctx.reply(
+          '⚠️ У вас уже есть одобренная заявка.\n\n' +
+          'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
+        );
+        return;
+      }
+      
+      // Проверяем, есть ли активные заявки
+      const activeApplications = await applicationRepository.findActiveApplicationsByUserId(user.id);
+      if (activeApplications.length > 0) {
+        await ctx.reply(
+          '⚠️ У вас уже есть активная заявка.\n\n' +
+          'Дождитесь рассмотрения текущей заявки или обратитесь к администраторам сервера.'
+        );
+        return;
+      }
+    }
+    
     await ctx.reply(
       '📝 Начинаем процесс подачи заявки на вступление.\n\n' +
       'Пожалуйста, укажите ваш никнейм в Minecraft:'

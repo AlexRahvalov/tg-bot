@@ -1,14 +1,13 @@
 import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { executeQuery } from '../connection';
-import { logger } from '../../utils/logger';
 
 /**
  * Выполнение миграций базы данных
  */
 export const runMigrations = async (): Promise<void> => {
   try {
-    logger.info('📊 Запуск миграций базы данных...');
+    console.log('📊 Запуск миграций базы данных...');
     
     // Получаем список всех файлов миграций
     const migrationFiles = await readdir(__dirname);
@@ -20,7 +19,7 @@ export const runMigrations = async (): Promise<void> => {
     
     // Выполняем каждый файл миграции по очереди
     for (const sqlFile of sqlFiles) {
-      logger.info(`⏳ Выполнение миграции: ${sqlFile}`);
+      console.log(`⏳ Выполнение миграции: ${sqlFile}`);
       
       // Чтение SQL-скрипта
       const sqlPath = join(__dirname, sqlFile);
@@ -29,12 +28,12 @@ export const runMigrations = async (): Promise<void> => {
       try {
         // Выполняем весь скрипт целиком
         await executeQuery(sql);
-        logger.info(`✅ Миграция ${sqlFile} успешно выполнена`);
+        console.log(`✅ Миграция ${sqlFile} успешно выполнена`);
       } catch (error) {
-        logger.error(`❌ Ошибка при выполнении миграции ${sqlFile}:`, error);
+        console.error(`❌ Ошибка при выполнении миграции ${sqlFile}:`, error);
         
         // Если произошла ошибка, попробуем выполнить команды по отдельности
-        logger.info(`⏳ Пробуем выполнить команды из ${sqlFile} по отдельности...`);
+        console.log(`⏳ Пробуем выполнить команды из ${sqlFile} по отдельности...`);
         
         // Разделяем SQL на отдельные команды
         const sqlCommands = sql
@@ -46,16 +45,16 @@ export const runMigrations = async (): Promise<void> => {
           try {
             await executeQuery(sqlCommand);
           } catch (cmdError) {
-            logger.error(`❌ Ошибка в SQL команде: ${sqlCommand}`, cmdError);
+            console.error(`❌ Ошибка в SQL команде: ${sqlCommand}`, cmdError);
             throw cmdError;
           }
         }
       }
     }
     
-    logger.info('✅ Миграции успешно выполнены');
+    console.log('✅ Миграции успешно выполнены');
   } catch (error) {
-    logger.error('❌ Ошибка при выполнении миграций:', error);
+    console.error('❌ Ошибка при выполнении миграций:', error);
     throw error;
   }
 }; 
