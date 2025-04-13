@@ -1,25 +1,41 @@
-version: '3'
+version: '3.8'
 
 services:
-  mariadb:
-    image: mariadb:latest
+  # База данных MariaDB
+  db:
+    image: mariadb:10.11
     container_name: minecraft-bot-db
+    restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-password}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-your_db_password}
       MYSQL_DATABASE: ${DB_NAME:-minecraft_bot}
       MYSQL_USER: ${DB_USER:-minecraft_user}
-      MYSQL_PASSWORD: ${DB_PASSWORD:-password}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-your_db_password}
     ports:
       - "${DB_PORT:-3306}:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
-    restart: unless-stopped
-    networks:
-      - bot-network
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-your_db_password}"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
-networks:
-  bot-network:
-    driver: bridge
+  # Админ-панель для базы данных phpMyAdmin (опционально)
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: minecraft-bot-phpmyadmin
+    restart: always
+    depends_on:
+      - db
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-your_db_password}
+    ports:
+      - "8080:80"
 
 volumes:
   mariadb_data: 
