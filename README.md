@@ -18,7 +18,6 @@
 
 Бот использует централизованную систему управления ролями через `RoleManager`:
 
-- **NEW_USER** - Новые пользователи (могут подавать заявки)
 - **APPLICANT** - Пользователи с активными заявками
 - **MEMBER** - Участники сообщества (имеют право голоса)
 - **ADMIN** - Администраторы (полный доступ)
@@ -67,7 +66,7 @@
 
 1. Клонируйте репозиторий:
 ```bash
-git clone https://github.com/yourusername/tg-bot.git
+git clone https://github.com/AlexRahvalov/tg-bot.git
 cd tg-bot
 ```
 
