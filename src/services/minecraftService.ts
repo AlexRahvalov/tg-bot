@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { logger } from '../utils/logger';
-import { status, RCON } from 'minecraft-server-util';
+import { Rcon } from 'rcon-client';
 import config from '../config/env';
 import { UserRepository } from '../db/repositories/userRepository.js';
 import { WhitelistStatus } from '../models/types.js';
@@ -85,26 +85,67 @@ export class MinecraftService {
    * @returns Объект с флагом online и дополнительной информацией о сервере (если доступен)
    */
   async checkServerStatus(): Promise<{ online: boolean; info?: any }> {
+    let rcon: Rcon | null = null;
+    
     try {
       logger.info(`Проверка статуса сервера ${this.serverHost}:${this.rconPort}...`);
-      const result = await status(this.serverHost, 25565, {
+      
+      // Создаем RCON подключение для проверки доступности
+      rcon = new Rcon({
+        host: this.serverHost,
+        port: this.rconPort,
+        password: this.rconPassword,
         timeout: this.statusCheckTimeout
       });
+      
+      // Подключаемся к серверу
+      await rcon.connect();
+      
+      // Получаем информацию о сервере через команды
+      const listResponse = await rcon.send('list');
+      const versionResponse = await rcon.send('version');
+      
+      // Парсим информацию об игроках из команды list
+      let playersOnline = 0;
+      let maxPlayers = 0;
+      
+      // Формат ответа: "There are X of a max of Y players online:"
+      const playerMatch = listResponse.match(/There are (\d+) of a max of (\d+) players online/);
+      if (playerMatch) {
+        playersOnline = parseInt(playerMatch[1] || '0');
+        maxPlayers = parseInt(playerMatch[2] || '0');
+      }
+      
+      // Парсим версию сервера
+      let version = 'Unknown';
+      const versionMatch = versionResponse.match(/This server is running (.+?) version/);
+      if (versionMatch) {
+        version = versionMatch[1] || 'Unknown';
+      }
       
       return {
         online: true,
         info: {
-          version: result.version.name,
+          version: version,
           players: {
-            online: result.players.online,
-            max: result.players.max
+            online: playersOnline,
+            max: maxPlayers
           },
-          motd: result.motd.clean
+          motd: 'Server Online' // MOTD недоступен через RCON
         }
       };
     } catch (error) {
       logger.error('Ошибка при проверке статуса сервера:', error);
       return { online: false };
+    } finally {
+      // Закрываем соединение
+      if (rcon) {
+        try {
+          await rcon.end();
+        } catch (closeError) {
+          logger.error('Ошибка при закрытии RCON соединения:', closeError);
+        }
+      }
     }
   }
   
@@ -119,35 +160,23 @@ export class MinecraftService {
     let lastError: any = null;
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      let rcon: RCON | null = null;
+      let rcon: Rcon | null = null;
       
       try {
-        // Проверяем статус сервера перед подключением
-        const status = await this.checkServerStatus();
-        if (!status.online) {
-          logger.warn(`Сервер недоступен (попытка ${attempt}/${maxRetries})`);
-          lastError = new Error('Сервер недоступен');
-          
-          if (attempt < maxRetries) {
-            logger.info(`Ожидание ${retryDelay}мс перед следующей попыткой...`);
-            await new Promise(resolve => setTimeout(resolve, retryDelay));
-            continue;
-          }
-          return null;
-        }
-        
         // Создаем подключение RCON
-        rcon = new RCON();
+        rcon = new Rcon({
+          host: this.serverHost,
+          port: this.rconPort,
+          password: this.rconPassword,
+          timeout: this.rconTimeout
+        });
         
         // Подключаемся к серверу
-        await rcon.connect(this.serverHost, this.rconPort);
-        
-        // Авторизуемся
-        await rcon.login(this.rconPassword);
+        await rcon.connect();
         
         // Выполняем команду
         logger.info(`✅ Выполнение RCON команды: ${command} (попытка ${attempt}/${maxRetries})`);
-        const response = await rcon.execute(command);
+        const response = await rcon.send(command);
         
         logger.info(`✅ RCON команда выполнена успешно: ${command}`);
         return response;
@@ -163,7 +192,7 @@ export class MinecraftService {
         // Закрываем соединение, если оно было открыто
         if (rcon) {
           try {
-            await rcon.close();
+            await rcon.end();
           } catch (closeError) {
             logger.error('Ошибка при закрытии RCON соединения:', closeError);
           }
@@ -185,18 +214,6 @@ export class MinecraftService {
     try {
       logger.info(`Добавление игрока ${nickname} (${uuid}) в белый список`);
       
-      // Проверяем статус сервера
-      const status = await this.checkServerStatus();
-      if (!status.online) {
-        logger.error('Сервер недоступен, невозможно добавить игрока в белый список');
-        // Обновляем статус пользователя на not_added если передан userId
-        if (userId) {
-          const userRepo = new UserRepository();
-          await userRepo.updateWhitelistStatus(userId, WhitelistStatus.NOT_ADDED);
-        }
-        return false;
-      }
-      
       // Формируем команду whitelist add с указанием UUID
       // В современных версиях Minecraft это важно, так как игроки могут менять ники
       const command = `whitelist add ${nickname}`;
@@ -208,7 +225,9 @@ export class MinecraftService {
       
       // Проверяем успешность выполнения команды
       const success = response.includes('added to the whitelist') || 
-                     response.includes('добавлен в белый список');
+                     response.includes('добавлен в белый список') ||
+                     response.includes('Added') ||
+                     response.includes('Player added to whitelist');
       
       if (success) {
         logger.info(`Игрок ${nickname} успешно добавлен в белый список`);
@@ -252,13 +271,6 @@ export class MinecraftService {
         logger.info(`Удаление игрока ${nickname} из белого списка`);
       }
       
-      // Проверяем статус сервера
-      const status = await this.checkServerStatus();
-      if (!status.online) {
-        logger.error('Сервер недоступен, невозможно удалить игрока из белого списка');
-        return false;
-      }
-      
       // Формируем команду whitelist remove
       const command = `whitelist remove ${nickname}`;
       const response = await this.executeRconCommand(command);
@@ -269,7 +281,9 @@ export class MinecraftService {
       
       // Проверяем успешность выполнения команды
       const success = response.includes('removed from the whitelist') || 
-                      response.includes('удален из белого списка');
+                      response.includes('удален из белого списка') ||
+                      response.includes('Removed') ||
+                      response.includes('Player removed from whitelist');
       
       if (success) {
         logger.info(`Игрок ${nickname} успешно удален из белого списка`);
@@ -296,13 +310,6 @@ export class MinecraftService {
   async getWhitelistedPlayers(): Promise<string[] | null> {
     try {
       logger.info('Получение списка игроков в белом списке');
-      
-      // Проверяем статус сервера
-      const status = await this.checkServerStatus();
-      if (!status.online) {
-        logger.error('Сервер недоступен, невозможно получить список игроков');
-        return null;
-      }
       
       // Выполняем команду whitelist list
       const response = await this.executeRconCommand('whitelist list');
@@ -339,6 +346,11 @@ export class MinecraftService {
       if (!match) {
         // Пробуем более общий формат
         match = response.match(/whitelisted.*?:\s*(.*)/i);
+      }
+      
+      if (!match) {
+        // Пробуем еще более простой формат для новых версий
+        match = response.match(/:\s*(.+)$/i);
       }
       
       if (match && match[1] && match[1].trim()) {

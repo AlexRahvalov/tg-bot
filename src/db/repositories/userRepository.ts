@@ -2,6 +2,7 @@ import { executeQuery } from '../connection';
 import type { User, WhitelistStatus } from '../../models/types';
 import { UserRole } from '../../models/types';
 import { logger } from '../../utils/logger';
+import { RoleManager } from '../../components/roles';
 
 /**
  * Репозиторий для работы с пользователями
@@ -63,7 +64,7 @@ export class UserRepository {
         userData.username || null,
         userData.nickname || userData.username || userData.minecraftNickname,
         userData.minecraftNickname,
-        userData.role || UserRole.APPLICANT,
+        userData.role || RoleManager.ROLES.APPLICANT,
         userData.canVote || false
       ]
     );
@@ -183,7 +184,7 @@ export class UserRepository {
          FROM users u 
          WHERE u.role IN (?, ?)
          ORDER BY u.nickname ASC`,
-        [UserRole.MEMBER, UserRole.ADMIN]
+        [RoleManager.ROLES.MEMBER, RoleManager.ROLES.ADMIN]
       );
       
       logger.info(`Найдено ${users.length} участников`);
@@ -222,7 +223,7 @@ export class UserRepository {
   async findAdmins(): Promise<User[]> {
     const users = await executeQuery(
       `SELECT * FROM users WHERE role = ?`,
-      [UserRole.ADMIN]
+      [RoleManager.ROLES.ADMIN]
     );
     
     return users.map(this.mapDbToUser);
@@ -252,7 +253,7 @@ export class UserRepository {
     try {
       const result = await executeQuery(
         `UPDATE users SET can_vote = true WHERE role = ?`,
-        [UserRole.MEMBER]
+        [RoleManager.ROLES.MEMBER]
       );
       
       logger.info(`Обновлены права голосования для всех участников (${result.affectedRows} пользователей)`);
@@ -269,7 +270,7 @@ export class UserRepository {
   async findApprovedUsersWithUUID(): Promise<User[]> {
     const users = await executeQuery(
       `SELECT * FROM users WHERE role = ? AND minecraft_uuid IS NOT NULL AND minecraft_uuid != ''`,
-      [UserRole.MEMBER]
+      [RoleManager.ROLES.MEMBER]
     );
     
     return users.map((user: any) => this.mapDbToUser(user));
@@ -281,7 +282,7 @@ export class UserRepository {
   async findUsersNotInWhitelist(): Promise<User[]> {
     const users = await executeQuery(
       `SELECT * FROM users WHERE role = ? AND minecraft_uuid IS NOT NULL AND minecraft_uuid != '' AND whitelist_status = ?`,
-      [UserRole.MEMBER, 'not_added']
+      [RoleManager.ROLES.MEMBER, 'not_added']
     );
     
     return users.map((user: any) => this.mapDbToUser(user));

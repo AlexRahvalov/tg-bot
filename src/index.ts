@@ -11,6 +11,7 @@ import { VotingService } from './services/votingService';
 import { logger } from './utils/logger';
 import { UserRepository } from './db/repositories/userRepository';
 import { UserRole, ApplicationStatus, WhitelistStatus } from './models/types';
+import { RoleManager } from './components/roles';
 import { ratingService } from './services/ratingService';
 import { MinecraftService } from './services/minecraftService';
 import { ProfileService } from './services/profileService';
@@ -256,9 +257,9 @@ bot.callbackQuery(/^view_profile_(\d+)$/, async (ctx) => {
     const ratingsDetails = await ratingService.getUserRatingsDetails(targetUserId);
     
     const roleName = {
-      [UserRole.ADMIN]: 'Администратор',
-      [UserRole.MEMBER]: 'Участник',
-      [UserRole.APPLICANT]: 'Заявитель'
+      [RoleManager.ROLES.ADMIN]: 'Администратор',
+      [RoleManager.ROLES.MEMBER]: 'Участник',
+      [RoleManager.ROLES.APPLICANT]: 'Заявитель'
     }[user.role];
     
     let message = `👤 *Профиль пользователя*\n\n` +
@@ -539,14 +540,14 @@ async function ensureAdminAccount() {
         telegramId: adminTelegramId,
         username: 'admin',
         minecraftNickname: 'admin',
-        role: UserRole.ADMIN,
+        role: RoleManager.ROLES.ADMIN,
         canVote: true
       });
       logger.info(`✅ Создан аккаунт администратора (Telegram ID: ${adminTelegramId})`);
-    } else if (adminUser.role !== UserRole.ADMIN) {
+    } else if (!RoleManager.isAdmin(adminUser)) {
       // Обновляем права, если аккаунт существует, но не имеет прав администратора
       adminUser = await userRepository.update(adminUser.id, {
-        role: UserRole.ADMIN,
+        role: RoleManager.ROLES.ADMIN,
         canVote: true
       });
       logger.info(`✅ Обновлены права администратора (Telegram ID: ${adminTelegramId})`);

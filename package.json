@@ -1,7 +1,7 @@
 {
   "name": "tg-bot",
   "description": "Telegram-бота для доступа к Minecraft-серверу",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "AlexRahvalov <t.me/AlexRahvalov>",
   "contributors": [
     "Claude AI (Anthropic)"
@@ -18,7 +18,8 @@
     "dev": "bun run index.ts",
     "build": "bun build index.ts --outfile dist/index.js --target=bun",
     "start": "bun run dist/index.js",
-    "get-id": "bun run src/utils/getMyId.ts"
+    "get-id": "bun run src/utils/getMyId.ts",
+    "migrate": "bun run src/scripts/migrations.ts"
   },
   "license": "MIT",
   "module": "index.ts",
@@ -36,7 +37,6 @@
     "dotenv": "^16.6.1",
     "grammy": "^1.38.2",
     "mariadb": "^3.4.5",
-    "minecraft-protocol": "^1.61.0",
-    "minecraft-server-util": "^5.4.4"
+    "rcon-client": "^4.2.5"
   }
 }

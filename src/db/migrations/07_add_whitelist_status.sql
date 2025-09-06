@@ -2,4 +2,5 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS whitelist_status ENUM('added', 'removed', 'not_added') DEFAULT 'not_added';
 
 -- Обновляем существующих пользователей с ролью 'member' на статус 'not_added'
-UPDATE users SET whitelist_status = 'not_added' WHERE role = 'member' AND minecraft_uuid IS NOT NULL AND minecraft_uuid != '' AND whitelist_status IS NULL;
+-- Убираем проверку minecraft_uuid, так как это поле добавляется в более поздней миграции
+UPDATE users SET whitelist_status = 'not_added' WHERE role = 'member' AND whitelist_status IS NULL;

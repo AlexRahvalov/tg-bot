@@ -12,6 +12,7 @@ import { botController } from './botController';
 import { QuestionRepository } from "../db/repositories/questionRepository";
 import { VoteRepository } from "../db/repositories/voteRepository";
 import { ButtonComponents } from "../components/buttons";
+import { RoleManager } from "../components/roles";
 
 // Создаем экземпляр композера для контроллера заявок
 const applicationController = new Composer<MyContext>();
@@ -49,7 +50,7 @@ applicationController.command("apply", handleError(async (ctx: MyContext) => {
   
   if (user) {
     // Проверяем, является ли пользователь уже участником
-    if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
+    if (RoleManager.isMemberOrAdmin(user)) {
       await ctx.reply(
         '⚠️ Вы уже являетесь участником сервера.\n\n' +
         'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
@@ -111,7 +112,7 @@ applicationController.callbackQuery('start_application', handleError(async (ctx)
   
   if (user) {
     // Проверяем, является ли пользователь уже участником
-    if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
+    if (RoleManager.isMemberOrAdmin(user)) {
       await ctx.reply(
         '⚠️ Вы уже являетесь участником сервера.\n\n' +
         'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
@@ -169,7 +170,7 @@ botController.hears("📝 Подать заявку", async (ctx: MyContext) => 
     
     if (user) {
       // Проверяем, является ли пользователь уже участником
-      if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
+      if (RoleManager.isMemberOrAdmin(user)) {
         await ctx.reply(
           '⚠️ Вы уже являетесь участником сервера.\n\n' +
           'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
@@ -243,7 +244,7 @@ applicationController.command("status", handleError(async (ctx: MyContext) => {
     
     if (activeApplications.length === 0) {
       // Проверяем, является ли пользователь членом сообщества
-      if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
+      if (RoleManager.isMemberOrAdmin(user)) {
         await ctx.reply(
           '✅ Вы являетесь членом сообщества и имеете доступ к серверу!\n\n' +
           'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
@@ -367,7 +368,7 @@ applicationController.callbackQuery('confirm_application', handleError(async (ct
         telegramId,
         username: ctx.from.username || undefined, // Используем undefined, если username не указан
         minecraftNickname,
-        role: UserRole.APPLICANT,
+        role: RoleManager.ROLES.APPLICANT,
         canVote: false
       });
     } else {
@@ -1079,7 +1080,7 @@ applicationController.callbackQuery(/^view_questions_(\d+)$/, async (ctx) => {
     }
     
     // Проверяем права на просмотр вопросов (только владелец заявки, администратор или тот, кто задал вопрос)
-    const isAdmin = currentUser.role === UserRole.ADMIN;
+    const isAdmin = RoleManager.isAdmin(currentUser);
     const isApplicant = currentUser.id === application.userId;
     
     // Фильтруем вопросы в зависимости от прав

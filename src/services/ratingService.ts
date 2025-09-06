@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 import { UserRepository } from '../db/repositories/userRepository';
 import type { User, Rating, RatingDetail } from '../models/types';
 import { UserRole } from '../models/types';
+import { RoleManager } from '../components/roles';
 import { MinecraftService } from './minecraftService';
 import { SystemSettingsRepository } from '../db/repositories/systemSettingsRepository';
 import { Bot } from 'grammy';
@@ -74,7 +75,7 @@ export class RatingService {
       
       // Проверка, что оцениваемый пользователь является участником или админом
       const target = await this.userRepository.findById(targetUserId);
-      if (target.role !== UserRole.MEMBER && target.role !== UserRole.ADMIN) {
+      if (!RoleManager.isMemberOrAdmin(target)) {
         logger.warn('Попытка оценить пользователя с недопустимой ролью', { targetUserId, role: target.role });
         return false;
       }
@@ -281,7 +282,7 @@ export class RatingService {
         });
         
         // Меняем роль на заявителя
-        await this.userRepository.updateRole(userId, UserRole.APPLICANT);
+        await this.userRepository.updateRole(userId, RoleManager.ROLES.APPLICANT);
         
         // Убираем право голосовать
         await this.userRepository.updateCanVote(userId, false);

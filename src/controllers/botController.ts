@@ -12,6 +12,7 @@ import { formatDate } from '../utils/stringUtils';
 import config from '../config/env';
 import { UserUtils } from '../utils/userUtils';
 import { ButtonComponents } from '../components/buttons';
+import { RoleManager } from '../components/roles';
 
 // Создаем репозиторий пользователей для проверки прав
 const userRepository = new UserRepository();
@@ -38,11 +39,11 @@ botController.use(async (ctx, next) => {
       // Обновляем информацию о пользователе, если она изменилась
       const username = ctx.from.username || `user_${telegramId}`;
       
-      if (user.username !== username || (isConfigAdmin && user.role !== UserRole.ADMIN)) {
+      if (user.username !== username || (isConfigAdmin && !RoleManager.isAdmin(user))) {
         // Обновляем username и роль, если это администратор из конфига
         await userRepository.update(user.id, {
           username,
-          ...(isConfigAdmin ? { role: UserRole.ADMIN, canVote: true } : {})
+          ...(isConfigAdmin ? { role: RoleManager.ROLES.ADMIN, canVote: true } : {})
         });
         
         logger.info(`Обновлена информация о пользователе: ${username} (${telegramId})`);
@@ -110,7 +111,7 @@ async function showServerInfo(ctx: MyContext) {
     if (ctx.from?.id) {
       try {
         const user = await userRepository.findByTelegramId(ctx.from.id);
-        if (user && user.role === UserRole.ADMIN) {
+        if (RoleManager.isAdmin(user)) {
           const adminKeyboard = keyboardService.getAdminPanelKeyboard();
           await ctx.reply("Панель администратора:", { reply_markup: adminKeyboard });
         }
@@ -129,7 +130,7 @@ async function showAdminPanel(ctx: MyContext) {
     
     const user = await userRepository.findByTelegramId(ctx.from.id);
     
-    if (!user || user.role !== UserRole.ADMIN) {
+    if (!RoleManager.isAdmin(user)) {
       const keyboard = await keyboardService.getMainKeyboard(ctx.from.id);
       return await ctx.reply(
         "⚠️ У вас нет прав доступа к этой функции.",
@@ -194,7 +195,7 @@ botController.command("admin", async (ctx) => {
     const userRepository = new UserRepository();
     const user = await userRepository.findByTelegramId(ctx.from.id);
     
-    if (!user || user.role !== UserRole.ADMIN) {
+    if (!RoleManager.isAdmin(user)) {
       const keyboard = await keyboardService.getMainKeyboard(ctx.from.id);
       await UserUtils.handleAccessDenied(
         ctx, 
@@ -254,7 +255,7 @@ botController.hears("📊 Статус заявки", async (ctx) => {
     }
     
     // Проверяем статус пользователя
-    if (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN) {
+    if (RoleManager.isMemberOrAdmin(user)) {
       await ctx.reply(
         '✅ Вы являетесь членом сообщества и имеете доступ к серверу!\n\n' +
         'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
@@ -314,7 +315,7 @@ botController.hears("🛠️ Админ-панель", async (ctx) => {
     const userRepository = new UserRepository();
     const user = await userRepository.findByTelegramId(ctx.from.id);
     
-    if (!user || user.role !== UserRole.ADMIN) {
+    if (!user || !RoleManager.isAdmin(user)) {
       await UserUtils.handleAccessDenied(ctx, 'admin_panel');
       return;
     }
@@ -447,7 +448,7 @@ botController.hears("👥 Участники", async (ctx) => {
     }
     
     // Только члены и администраторы могут просматривать других участников
-    if (user.role !== UserRole.MEMBER && user.role !== UserRole.ADMIN) {
+    if (!RoleManager.isMemberOrAdmin(user)) {
       await UserUtils.handleAccessDenied(ctx, 'members_role_check');
       return;
     }
@@ -530,7 +531,7 @@ botController.hears("🗳️ Активные заявки", async (ctx) => {
     const user = await userRepository.findByTelegramId(telegramId);
     
     // Проверяем права пользователя
-    if (!user || (user.role !== UserRole.MEMBER && user.role !== UserRole.ADMIN)) {
+    if (!RoleManager.isMemberOrAdmin(user)) {
       await UserUtils.handleAccessDenied(ctx, 'active_applications');
       return;
     }

@@ -2,6 +2,7 @@ import { UserRepository } from '../db/repositories/userRepository';
 import { UserRole, type User } from '../models/types';
 import type { MyContext } from '../index';
 import { logger } from './logger';
+import { RoleManager } from '../components/roles';
 
 /**
  * Утилиты для работы с пользователями
@@ -24,7 +25,16 @@ export class UserUtils {
    * @returns true, если пользователь администратор
    */
   static isAdmin(user: User | null): boolean {
-    return user?.role === UserRole.ADMIN;
+    return RoleManager.isAdmin(user);
+  }
+
+  /**
+   * Проверяет, является ли пользователь участником
+   * @param user Пользователь
+   * @returns true, если пользователь участник
+   */
+  static isMember(user: User | null): boolean {
+    return RoleManager.isMember(user);
   }
 
   /**
@@ -33,7 +43,7 @@ export class UserUtils {
    * @returns true, если пользователь участник или администратор
    */
   static isMemberOrAdmin(user: User | null): boolean {
-    return user?.role === UserRole.MEMBER || user?.role === UserRole.ADMIN;
+    return RoleManager.isMemberOrAdmin(user);
   }
 
   /**
@@ -42,7 +52,7 @@ export class UserUtils {
    * @returns true, если пользователь может голосовать
    */
   static canVote(user: User | null): boolean {
-    return user?.canVote === true && this.isMemberOrAdmin(user);
+    return RoleManager.canVote(user);
   }
 
   /**
@@ -157,11 +167,6 @@ export class UserUtils {
    * @returns Строковое представление роли
    */
   static getRoleDisplayName(role: UserRole): string {
-    const roleMap = {
-      [UserRole.ADMIN]: 'Администратор',
-      [UserRole.MEMBER]: 'Участник',
-      [UserRole.APPLICANT]: 'Заявитель'
-    };
-    return roleMap[role] || 'Неизвестная роль';
+    return RoleManager.getRoleDisplayName(role);
   }
 }

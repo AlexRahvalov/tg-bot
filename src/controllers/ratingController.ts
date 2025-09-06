@@ -8,6 +8,7 @@ import { logger } from '../utils/logger';
 import { formatDate } from '../utils/stringUtils';
 import { UserUtils } from '../utils/userUtils';
 import { ButtonComponents } from '../components/buttons';
+import { RoleManager } from '../components/roles';
 
 // Создаем репозиторий пользователей
 const userRepository = new UserRepository();
@@ -155,7 +156,7 @@ ratingController.callbackQuery(/^select_member_(\d+)$/, async (ctx) => {
     }
     
     // Проверяем, что пользователь является участником или администратором
-    if (user.role !== UserRole.MEMBER && user.role !== UserRole.ADMIN) {
+    if (!RoleManager.isMemberOrAdmin(user)) {
       await UserUtils.handleAccessDenied(
         ctx, 
         'ratingController.select_member_', 
@@ -465,9 +466,9 @@ ratingController.callbackQuery(/^view_profile_(\d+)$/, async (ctx) => {
     const ratingsDetails = await ratingService.getUserRatingsDetails(targetUserId);
     
     const roleName = {
-      [UserRole.ADMIN]: 'Администратор',
-      [UserRole.MEMBER]: 'Участник',
-      [UserRole.APPLICANT]: 'Заявитель'
+      [RoleManager.ROLES.ADMIN]: RoleManager.getRoleDisplayName(RoleManager.ROLES.ADMIN),
+      [RoleManager.ROLES.MEMBER]: RoleManager.getRoleDisplayName(RoleManager.ROLES.MEMBER),
+      [RoleManager.ROLES.APPLICANT]: RoleManager.getRoleDisplayName(RoleManager.ROLES.APPLICANT)
     }[user.role];
     
     let message = `👤 *Профиль пользователя*\n\n` +
@@ -871,7 +872,7 @@ ratingController.callbackQuery("return_to_members", async (ctx) => {
     }
     
     // Только члены и администраторы могут оценивать других участников
-    if (user.role !== UserRole.MEMBER && user.role !== UserRole.ADMIN) {
+    if (!RoleManager.isMemberOrAdmin(user)) {
       await ctx.reply("⚠️ Только участники и администраторы могут просматривать и оценивать других участников.");
       return;
     }

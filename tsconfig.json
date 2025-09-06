@@ -14,6 +14,9 @@
     "verbatimModuleSyntax": true,
     "noEmit": true,
 
+    // Type definitions
+    "typeRoots": ["./src/types", "./node_modules/@types"],
+
     // Best practices
     "strict": true,
     "skipLibCheck": true,

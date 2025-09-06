@@ -1,6 +1,7 @@
 import { Keyboard, InlineKeyboard } from 'grammy';
 import { UserRepository } from '../db/repositories/userRepository';
 import { UserRole } from '../models/types';
+import { RoleManager } from '../components/roles';
 import { logger } from '../utils/logger';
 import { ButtonComponents } from '../components/buttons';
 
@@ -27,14 +28,14 @@ class KeyboardService {
         const user = await this.userRepository.findByTelegramId(userId);
         logger.info(`KeyboardService: Проверка пользователя ${userId}, найден: ${user ? `${user.username} (${user.role})` : 'не найден'}`);
         
-        if (user && (user.role === UserRole.MEMBER || user.role === UserRole.ADMIN)) {
+        if (user && RoleManager.isMemberOrAdmin(user)) {
           // Для участников и админов показываем кнопки профиля и участников
           keyboard.text("👤 Профиль").text("👥 Участники").row();
           keyboard.text("🗳️ Активные заявки").row();
           keyboard.text("ℹ️ Помощь").text("📋 О сервере").row();
           
           // Для админов добавляем кнопку админ-панели
-          if (user.role === UserRole.ADMIN) {
+          if (RoleManager.isAdmin(user)) {
             keyboard.text("🛠️ Админ-панель").row();
           }
         } else {

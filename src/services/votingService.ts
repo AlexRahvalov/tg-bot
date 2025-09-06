@@ -3,6 +3,7 @@ import { ApplicationRepository } from '../db/repositories/applicationRepository'
 import { VoteRepository } from '../db/repositories/voteRepository';
 import { UserRepository } from '../db/repositories/userRepository';
 import { ApplicationStatus, UserRole } from '../models/types';
+import { RoleManager } from '../components/roles';
 import type { MyContext } from '../index';
 import config from '../config/env';
 import { SystemSettingsRepository } from '../db/repositories/systemSettingsRepository';
@@ -215,7 +216,7 @@ export class VotingService {
       // Обновляем роль пользователя и сохраняем UUID
       if (applicant) {
         await this.userRepository.update(applicant.id, {
-          role: UserRole.MEMBER,
+          role: RoleManager.ROLES.MEMBER,
           canVote: true, // Разрешаем новому участнику голосовать
           minecraftUUID: offlineUUID
         });

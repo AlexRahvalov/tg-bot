@@ -14,6 +14,7 @@ import { QuestionRepository } from "../db/repositories/questionRepository";
 import { MinecraftService } from "../services/minecraftService";
 import { UserUtils } from '../utils/userUtils';
 import { ButtonComponents } from '../components/buttons';
+import { RoleManager } from '../components/roles';
 
 // Создаем репозитории
 const userRepository = new UserRepository();
@@ -32,7 +33,7 @@ const adminMiddleware = async (ctx: MyContext, next: () => Promise<void>) => {
 
     const user = await userRepository.findByTelegramId(ctx.from.id);
     
-    if (!user || user.role !== UserRole.ADMIN) {
+    if (!RoleManager.isAdmin(user)) {
       return await UserUtils.handleAccessDenied(
         ctx, 
         'adminController.adminMiddleware', 
@@ -83,14 +84,14 @@ adminController.callbackQuery(/^confirm_user_(\d+)$/, async (ctx) => {
       return;
     }
     
-    if (user.role !== UserRole.APPLICANT) {
+    if (!RoleManager.isApplicant(user)) {
       await ctx.reply("⚠️ Пользователь уже подтвержден.");
       return;
     }
-    
+
     // Обновляем роль на участника и даем право голоса
     await userRepository.update(userId, {
-      role: UserRole.MEMBER,
+      role: RoleManager.ROLES.MEMBER,
       canVote: true
     });
     
@@ -152,7 +153,7 @@ adminController.callbackQuery(/^promote_user_(\d+)$/, async (ctx) => {
     const userId = parseInt(ctx.match?.[1] || '0');
     const user = await userRepository.findById(userId);
     
-    await userRepository.updateRole(userId, UserRole.MEMBER);
+    await userRepository.updateRole(userId, RoleManager.ROLES.MEMBER);
     
     await ctx.reply(
       `✅ Пользователь ${escapeMarkdown(user.minecraftNickname)} повышен до участника.`,
@@ -172,7 +173,7 @@ adminController.callbackQuery(/^demote_user_(\d+)$/, async (ctx) => {
     const user = await userRepository.findById(userId);
     
     await userRepository.update(userId, {
-      role: UserRole.APPLICANT,
+      role: RoleManager.ROLES.APPLICANT,
       canVote: false
     });
     
@@ -194,7 +195,7 @@ adminController.callbackQuery(/^make_admin_(\d+)$/, async (ctx) => {
     const user = await userRepository.findById(userId);
     
     await userRepository.update(userId, {
-      role: UserRole.ADMIN,
+      role: RoleManager.ROLES.ADMIN,
       canVote: true
     });
     
@@ -268,7 +269,7 @@ adminController.callbackQuery(/^remove_whitelist_(\d+)$/, async (ctx) => {
     if (removedFromWhitelist) {
       // Также понижаем роль до заявителя и убираем право голоса
       await userRepository.update(userId, {
-        role: UserRole.APPLICANT,
+        role: RoleManager.ROLES.APPLICANT,
         canVote: false
       });
       
@@ -318,8 +319,8 @@ adminController.callbackQuery(/^manage_user_(\d+)$/, async (ctx) => {
       return;
     }
     
-    const roleText = user.role === UserRole.ADMIN ? '👑 Администратор' : 
-                    user.role === UserRole.MEMBER ? '👤 Участник' : '📝 Заявитель';
+    const roleText = RoleManager.isAdmin(user) ? '👑 Администратор' : 
+                    RoleManager.isMember(user) ? '👤 Участник' : '📝 Заявитель';
     const voteText = user.canVote ? '✅ Есть' : '❌ Нет';
     
     const message = `👤 *Управление пользователем*\n\n` +
@@ -333,12 +334,12 @@ adminController.callbackQuery(/^manage_user_(\d+)$/, async (ctx) => {
     const keyboard = new InlineKeyboard();
     
     // Кнопки управления ролью
-    if (user.role === UserRole.APPLICANT) {
+    if (RoleManager.isApplicant(user)) {
       keyboard.text("✅ Подтвердить пользователя", `confirm_user_${userId}`).row();
     }
     
-    if (user.role !== UserRole.ADMIN) {
-      if (user.role === UserRole.MEMBER) {
+    if (!RoleManager.isAdmin(user)) {
+      if (RoleManager.isMember(user)) {
         keyboard.text("📝 Сделать заявителем", `demote_user_${userId}`);
       } else {
         keyboard.text("👤 Сделать участником", `promote_user_${userId}`);
@@ -355,7 +356,7 @@ adminController.callbackQuery(/^manage_user_(\d+)$/, async (ctx) => {
     keyboard.row();
     
     // Кнопка удаления из whitelist (только для участников и заявителей)
-    if (user.role !== UserRole.ADMIN && user.minecraftUUID) {
+    if (!RoleManager.isAdmin(user) && user.minecraftUUID) {
       keyboard.text("🚫 Удалить из whitelist", `remove_whitelist_${userId}`).row();
     }
     
@@ -374,8 +375,8 @@ adminController.callbackQuery(/^manage_user_(\d+)$/, async (ctx) => {
     const keyboard = new InlineKeyboard();
     
     for (const user of users) {
-      const roleIcon = user.role === UserRole.ADMIN ? '👑' : 
-                      user.role === UserRole.MEMBER ? '👤' : '📝';
+      const roleIcon = RoleManager.isAdmin(user) ? '👑' : 
+                      RoleManager.isMember(user) ? '👤' : '📝';
       const voteIcon = user.canVote ? '🗳️' : '🚫';
       const displayName = `${roleIcon} ${user.minecraftNickname} ${voteIcon}`;
       
@@ -1051,7 +1052,7 @@ adminController.callbackQuery(/^app_approve_(\d+)$/, async (ctx) => {
     
     // Обновляем роль пользователя на MEMBER, даем право голоса и сохраняем UUID
     await userRepository.update(user.id, {
-      role: UserRole.MEMBER,
+      role: RoleManager.ROLES.MEMBER,
       canVote: true,
       minecraftUUID: offlineUUID
     });
