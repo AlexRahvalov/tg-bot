@@ -13,6 +13,7 @@ import { QuestionRepository } from "../db/repositories/questionRepository";
 import { VoteRepository } from "../db/repositories/voteRepository";
 import { ButtonComponents } from "../components/buttons";
 import { RoleManager } from "../components/roles";
+import { validateMinecraftNickname, formatValidationError } from "../utils/minecraftValidation";
 
 // Создаем экземпляр композера для контроллера заявок
 const applicationController = new Composer<MyContext>();
@@ -282,13 +283,12 @@ applicationController.on('message', async (ctx, next) => {
   if (ctx.session?.step === 'waiting_nickname') {
     const minecraftNickname = ctx.message.text.trim();
     
-    // Проверяем валидность никнейма
-    if (minecraftNickname.length < 3 || minecraftNickname.length > 16 || !/^[a-zA-Z0-9_]+$/.test(minecraftNickname)) {
-      await ctx.reply(
-        '❌ Некорректный никнейм.\n\n' +
-        'Никнейм должен быть от 3 до 16 символов и может содержать только буквы, цифры и подчеркивания.\n' +
-        'Пожалуйста, введите корректный никнейм:'
-      );
+    // Проверяем валидность никнейма с помощью специализированной утилиты
+    const validationResult = validateMinecraftNickname(minecraftNickname);
+    
+    if (!validationResult.isValid) {
+      const errorMessage = formatValidationError(validationResult);
+      await ctx.reply(errorMessage, { parse_mode: 'Markdown' });
       return;
     }
     
