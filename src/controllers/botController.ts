@@ -74,19 +74,52 @@ async function showStartMessage(ctx: MyContext) {
 
 async function showHelpMessage(ctx: MyContext) {
   try {
+    if (!ctx.from) return;
+    
+    const user = await userRepository.findByTelegramId(ctx.from.id);
     const keyboard = await keyboardService.getMainKeyboard(ctx.from?.id);
     
-    await ctx.reply(
-      'Я помогаю управлять доступом к Minecraft-серверу.\n\n' +
-      'Доступные команды:\n' +
-      '/start - Начать работу с ботом\n' +
-      '/apply - Подать заявку на вступление\n' +
-      '/status - Проверить статус заявки\n' +
-      '/help - Показать справку\n\n' +
-      'Для администраторов:\n' +
-      '/admin - Панель администратора',
-      { reply_markup: keyboard }
-    );
+    let helpMessage = 'Я помогаю управлять доступом к Minecraft-серверу.\n\n';
+    
+    if (!user) {
+      // Для незарегистрированных пользователей
+      helpMessage += 'Доступные команды:\n' +
+        '/start - Начать работу с ботом\n' +
+        '/help - Показать справку\n\n' +
+        '📝 Чтобы получить доступ к серверу, подайте заявку на вступление!';
+    } else if (RoleManager.isVisitor(user)) {
+      // Для пользователей с ролью VISITOR
+      helpMessage += 'Доступные команды:\n' +
+        '/start - Главное меню\n' +
+        '/apply - Подать заявку на вступление\n' +
+        '/help - Показать справку\n\n' +
+        '📝 Подайте заявку, чтобы стать участником сообщества!';
+    } else if (RoleManager.isApplicant(user)) {
+      // Для заявителей
+      helpMessage += 'Доступные команды:\n' +
+        '/start - Главное меню\n' +
+        '/status - Проверить статус заявки\n' +
+        '/help - Показать справку\n\n' +
+        '⏳ Ваша заявка находится на рассмотрении.';
+    } else if (RoleManager.isMemberOrAdmin(user)) {
+      // Для участников и администраторов
+      helpMessage += 'Доступные команды:\n' +
+        '/start - Главное меню\n' +
+        '/profile - Ваш профиль\n' +
+        '/help - Показать справку\n\n';
+      
+      if (RoleManager.isAdmin(user)) {
+        helpMessage += 'Команды администратора:\n' +
+          '/admin - Панель администратора';
+      }
+    } else {
+      // Fallback для других случаев
+      helpMessage += 'Доступные команды:\n' +
+        '/start - Начать работу с ботом\n' +
+        '/help - Показать справку';
+    }
+    
+    await ctx.reply(helpMessage, { reply_markup: keyboard });
   } catch (error) {
     await handleErrorWithContext(ctx, error, "showHelpMessage");
   }
@@ -163,28 +196,64 @@ botController.command("start", async (ctx) => {
 
 botController.command("help", async (ctx) => {
   try {
-    const message = `🤖 Доступные команды:
+    if (!ctx.from) return;
+    
+    const telegramId = ctx.from.id;
+    const user = await userRepository.findByTelegramId(telegramId);
+    
+    let message = '';
+    
+    if (!user) {
+      // Для незарегистрированных пользователей
+      message = `🤖 Добро пожаловать!
 
-Основные команды:
+Доступные команды:
 /start - Начать работу с ботом
 /help - Показать список команд
 /apply - Подать заявку на вступление
+
+📝 Чтобы присоединиться к нашему сообществу, подайте заявку с помощью команды /apply или нажмите кнопку "📝 Подать заявку".`;
+    } else if (user.role === RoleManager.ROLES.APPLICANT) {
+      // Для пользователей с поданной заявкой
+      message = `🤖 Ваша заявка на рассмотрении
+
+Доступные команды:
+/start - Главное меню
+/help - Показать список команд
+/status - Проверить статус заявки
+
+⏳ Ожидайте рассмотрения вашей заявки администраторами.`;
+    } else if (RoleManager.isMemberOrAdmin(user)) {
+      // Для участников и админов
+      message = `🤖 Доступные команды:
+
+Основные команды:
+/start - Главное меню
+/help - Показать список команд
 
 Профиль и рейтинг:
 /profile - Посмотреть свой профиль
 /viewprofile - Посмотреть профили других участников
 /members - Показать список участников с возможностью оценки
+/applications - Просмотр активных заявок`;
+      
+      if (RoleManager.isAdmin(user)) {
+        message += `
 
 Для администраторов:
 /admin - Открыть панель администратора
-/update_all_voting_rights - Обновить права голосования для всех участников
+/update_all_voting_rights - Обновить права голосования для всех участников`;
+      }
+      
+      message += `
 
 Чтобы узнать больше о любой команде, просто введите её.`;
+    }
     
-    // Отправляем без форматирования Markdown, чтобы избежать ошибок парсинга
     await ctx.reply(message);
   } catch (error) {
     logger.error("Ошибка при обработке команды /help:", error);
+    await ctx.reply("Произошла ошибка при получении справки. Попробуйте позже.");
   }
 });
 
@@ -194,6 +263,11 @@ botController.command("admin", async (ctx) => {
     
     const userRepository = new UserRepository();
     const user = await userRepository.findByTelegramId(ctx.from.id);
+    
+    // Полностью игнорируем команду для applicant и visitor
+    if (!user || RoleManager.isVisitor(user) || RoleManager.isApplicant(user)) {
+      return;
+    }
     
     if (!RoleManager.isAdmin(user)) {
       const keyboard = await keyboardService.getMainKeyboard(ctx.from.id);
@@ -254,11 +328,20 @@ botController.hears("📊 Статус заявки", async (ctx) => {
       return;
     }
     
-    // Проверяем статус пользователя
+    // Проверяем, является ли пользователь уже участником или администратором
     if (RoleManager.isMemberOrAdmin(user)) {
       await ctx.reply(
         '✅ Вы являетесь членом сообщества и имеете доступ к серверу!\n\n' +
         'Если у вас возникли проблемы с доступом, обратитесь к администратору.'
+      );
+      return;
+    }
+
+    // Проверяем права на просмотр собственной заявки
+    if (!RoleManager.getPermissions(user.role).canViewOwnApplication) {
+      await ctx.reply(
+        '⚠️ У вас нет прав для просмотра статуса заявки.\n\n' +
+        'Для получения доступа необходимо подать заявку.'
       );
       return;
     }
@@ -290,8 +373,7 @@ botController.hears("📊 Статус заявки", async (ctx) => {
 
 botController.hears("ℹ️ Помощь", async (ctx) => {
   try {
-    const keyboard = await keyboardService.getMainKeyboard(ctx.from?.id);
-    await ctx.reply(messageService.getHelpMessage(), { reply_markup: keyboard });
+    await showHelpMessage(ctx);
   } catch (error) {
     logger.error("Ошибка при обработке кнопки помощи:", error);
     await ctx.reply("Произошла ошибка. Пожалуйста, попробуйте позже.");
@@ -301,7 +383,8 @@ botController.hears("ℹ️ Помощь", async (ctx) => {
 botController.hears("📋 О сервере", async (ctx) => {
   try {
     const keyboard = await keyboardService.getMainKeyboard(ctx.from?.id);
-    await ctx.reply(messageService.getServerInfoMessage(), { reply_markup: keyboard });
+    const serverInfoMessage = await messageService.getServerInfoMessage();
+    await ctx.reply(serverInfoMessage, { reply_markup: keyboard });
   } catch (error) {
     logger.error("Ошибка при обработке кнопки о сервере:", error);
     await ctx.reply("Произошла ошибка. Пожалуйста, попробуйте позже.");
@@ -315,7 +398,12 @@ botController.hears("🛠️ Админ-панель", async (ctx) => {
     const userRepository = new UserRepository();
     const user = await userRepository.findByTelegramId(ctx.from.id);
     
-    if (!user || !RoleManager.isAdmin(user)) {
+    // Полностью игнорируем кнопку для applicant и visitor
+    if (!user || RoleManager.isVisitor(user) || RoleManager.isApplicant(user)) {
+      return;
+    }
+    
+    if (!RoleManager.isAdmin(user)) {
       await UserUtils.handleAccessDenied(ctx, 'admin_panel');
       return;
     }

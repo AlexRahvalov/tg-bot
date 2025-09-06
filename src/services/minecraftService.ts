@@ -150,6 +150,30 @@ export class MinecraftService {
   }
   
   /**
+   * Получение полной информации о сервере для отображения
+   * @returns Объект с информацией о сервере (IP, версия, режим игры, статус)
+   */
+  async getServerInfo(): Promise<{
+    ip: string;
+    version: string;
+    gamemode: string;
+    accessType: string;
+    online: boolean;
+    players?: { online: number; max: number };
+  }> {
+    const serverStatus = await this.checkServerStatus();
+    
+    return {
+      ip: config.server.displayIp,
+      version: serverStatus.online && serverStatus.info?.version ? serverStatus.info.version : config.server.version,
+      gamemode: config.server.gamemode,
+      accessType: config.server.accessType,
+      online: serverStatus.online,
+      players: serverStatus.info?.players
+    };
+  }
+
+  /**
    * Выполнение команды через RCON с механизмом повторных попыток
    * @param command Команда для выполнения
    * @param maxRetries Максимальное количество попыток (по умолчанию 3)

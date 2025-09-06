@@ -47,8 +47,7 @@ const adminMiddleware = async (ctx: MyContext, next: () => Promise<void>) => {
   }
 };
 
-// Применяем middleware ко всем обработчикам в этом композере
-adminController.use(adminMiddleware);
+// Middleware будет применяться только к нужным обработчикам
 
 // Функция для экранирования специальных символов Markdown
 function escapeMarkdown(text: string): string {
@@ -58,7 +57,7 @@ function escapeMarkdown(text: string): string {
 }
 
 // Обработка callback-запросов для админ-панели
-adminController.callbackQuery("admin_users", async (ctx) => {
+adminController.callbackQuery("admin_users", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -392,7 +391,7 @@ adminController.callbackQuery(/^manage_user_(\d+)$/, async (ctx) => {
 });
 
 // Обработка запроса на управление заявками
-adminController.callbackQuery("admin_applications", async (ctx) => {
+adminController.callbackQuery("admin_applications", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -458,7 +457,7 @@ adminController.callbackQuery("admin_applications", async (ctx) => {
 });
 
 // Обработка запроса на настройки
-adminController.callbackQuery("admin_settings", async (ctx) => {
+adminController.callbackQuery("admin_settings", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -490,7 +489,7 @@ adminController.callbackQuery("admin_settings", async (ctx) => {
 });
 
 // Обработка настройки длительности голосования
-adminController.callbackQuery("settings_voting_duration", async (ctx) => {
+adminController.callbackQuery("settings_voting_duration", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -525,7 +524,7 @@ adminController.callbackQuery("settings_voting_duration", async (ctx) => {
 });
 
 // Возвращение в главное меню администратора
-adminController.callbackQuery("admin_back_to_main", async (ctx) => {
+adminController.callbackQuery("admin_back_to_main", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -544,7 +543,7 @@ adminController.callbackQuery("admin_back_to_main", async (ctx) => {
 });
 
 // Обработка изменения дней голосования
-adminController.callbackQuery(/^voting_days_(plus|minus)$/, async (ctx) => {
+adminController.callbackQuery(/^voting_days_(plus|minus)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -569,7 +568,7 @@ adminController.callbackQuery(/^voting_days_(plus|minus)$/, async (ctx) => {
 });
 
 // Обработка изменения часов голосования
-adminController.callbackQuery(/^voting_hours_(plus|minus)$/, async (ctx) => {
+adminController.callbackQuery(/^voting_hours_(plus|minus)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -594,7 +593,7 @@ adminController.callbackQuery(/^voting_hours_(plus|minus)$/, async (ctx) => {
 });
 
 // Обработка изменения минут голосования
-adminController.callbackQuery(/^voting_minutes_(plus|minus)$/, async (ctx) => {
+adminController.callbackQuery(/^voting_minutes_(plus|minus)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -619,7 +618,7 @@ adminController.callbackQuery(/^voting_minutes_(plus|minus)$/, async (ctx) => {
 });
 
 // Сохранение настроек времени голосования
-adminController.callbackQuery("voting_time_save", async (ctx) => {
+adminController.callbackQuery("voting_time_save", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -655,7 +654,7 @@ adminController.callbackQuery("voting_time_save", async (ctx) => {
 });
 
 // Возврат к настройкам из меню редактирования времени
-adminController.callbackQuery("voting_back", async (ctx) => {
+adminController.callbackQuery("voting_back", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -712,7 +711,7 @@ async function updateVotingTimeMessage(ctx: MyContext) {
 }
 
 // Обработка настройки минимального количества голосов
-adminController.callbackQuery("settings_min_votes", async (ctx) => {
+adminController.callbackQuery("settings_min_votes", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -740,7 +739,7 @@ adminController.callbackQuery("settings_min_votes", async (ctx) => {
 });
 
 // Обработка изменения минимального количества голосов
-adminController.callbackQuery(/^min_votes_(plus|minus)$/, async (ctx) => {
+adminController.callbackQuery(/^min_votes_(plus|minus)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -766,7 +765,7 @@ adminController.callbackQuery(/^min_votes_(plus|minus)$/, async (ctx) => {
 });
 
 // Сохранение настроек минимального количества голосов
-adminController.callbackQuery("min_votes_save", async (ctx) => {
+adminController.callbackQuery("min_votes_save", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -794,7 +793,7 @@ adminController.callbackQuery("min_votes_save", async (ctx) => {
 });
 
 // Возврат к настройкам из меню минимального количества голосов
-adminController.callbackQuery(/^admin_settings$/, async (ctx) => {
+adminController.callbackQuery(/^admin_settings$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -815,7 +814,7 @@ adminController.callbackQuery(/^admin_settings$/, async (ctx) => {
 });
 
 // Обработка настройки порога отрицательных оценок
-adminController.callbackQuery("settings_neg_threshold", async (ctx) => {
+adminController.callbackQuery("settings_neg_threshold", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -843,7 +842,7 @@ adminController.callbackQuery("settings_neg_threshold", async (ctx) => {
 });
 
 // Обработка изменения порога отрицательных оценок
-adminController.callbackQuery(/^neg_threshold_(plus|minus)$/, async (ctx) => {
+adminController.callbackQuery(/^neg_threshold_(plus|minus)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -869,7 +868,7 @@ adminController.callbackQuery(/^neg_threshold_(plus|minus)$/, async (ctx) => {
 });
 
 // Сохранение настроек порога отрицательных оценок
-adminController.callbackQuery("neg_threshold_save", async (ctx) => {
+adminController.callbackQuery("neg_threshold_save", adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -961,7 +960,7 @@ async function updateNegThresholdMessage(ctx: MyContext) {
 }
 
 // Обработка просмотра деталей заявки
-adminController.callbackQuery(/^app_view_(\d+)$/, async (ctx) => {
+adminController.callbackQuery(/^app_view_(\d+)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -1030,7 +1029,7 @@ adminController.callbackQuery(/^app_view_(\d+)$/, async (ctx) => {
 });
 
 // Обработка одобрения заявки
-adminController.callbackQuery(/^app_approve_(\d+)$/, async (ctx) => {
+adminController.callbackQuery(/^app_approve_(\d+)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -1099,7 +1098,7 @@ adminController.callbackQuery(/^app_approve_(\d+)$/, async (ctx) => {
 });
 
 // Обработка отклонения заявки
-adminController.callbackQuery(/^app_reject_(\d+)$/, async (ctx) => {
+adminController.callbackQuery(/^app_reject_(\d+)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -1147,7 +1146,7 @@ adminController.callbackQuery(/^app_reject_(\d+)$/, async (ctx) => {
 });
 
 // Обработка запуска голосования
-adminController.callbackQuery(/^app_start_voting_(\d+)$/, async (ctx) => {
+adminController.callbackQuery(/^app_start_voting_(\d+)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -1240,7 +1239,7 @@ adminController.callbackQuery(/^app_start_voting_(\d+)$/, async (ctx) => {
 });
 
 // Обработчик для кнопки "Задать вопрос"
-adminController.callbackQuery(/^ask_question_(\d+)$/, async (ctx) => {
+adminController.callbackQuery(/^ask_question_(\d+)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     
@@ -1343,7 +1342,7 @@ adminController.on('message:text', async (ctx, next) => {
 });
 
 // Обработчик для просмотра вопросов к заявке
-adminController.callbackQuery(/^view_questions_(\d+)$/, async (ctx) => {
+adminController.callbackQuery(/^view_questions_(\d+)$/, adminMiddleware, async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
     

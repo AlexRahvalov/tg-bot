@@ -61,7 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_votes_type ON votes(vote_type);
 -- Добавляем ограничение для проверки корректности роли пользователя
 ALTER TABLE users 
 ADD CONSTRAINT chk_user_role_valid 
-CHECK (role IN ('applicant', 'member', 'admin'));
+CHECK (role IN ('visitor', 'applicant', 'member', 'admin'));
 
 -- Добавляем ограничение для проверки корректности статуса заявки
 ALTER TABLE applications 

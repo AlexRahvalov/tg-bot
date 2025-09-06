@@ -468,7 +468,8 @@ ratingController.callbackQuery(/^view_profile_(\d+)$/, async (ctx) => {
     const roleName = {
       [RoleManager.ROLES.ADMIN]: RoleManager.getRoleDisplayName(RoleManager.ROLES.ADMIN),
       [RoleManager.ROLES.MEMBER]: RoleManager.getRoleDisplayName(RoleManager.ROLES.MEMBER),
-      [RoleManager.ROLES.APPLICANT]: RoleManager.getRoleDisplayName(RoleManager.ROLES.APPLICANT)
+      [RoleManager.ROLES.VISITOR]: RoleManager.getRoleDisplayName(RoleManager.ROLES.VISITOR),
+      [RoleManager.ROLES.APPLICANT]: RoleManager.getRoleDisplayName(RoleManager.ROLES.APPLICANT),
     }[user.role];
     
     let message = `👤 *Профиль пользователя*\n\n` +

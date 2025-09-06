@@ -368,7 +368,7 @@ applicationController.callbackQuery('confirm_application', handleError(async (ct
         telegramId,
         username: ctx.from.username || undefined, // Используем undefined, если username не указан
         minecraftNickname,
-        role: RoleManager.ROLES.APPLICANT,
+        role: RoleManager.ROLES.VISITOR,
         canVote: false
       });
     } else {
@@ -401,6 +401,11 @@ applicationController.callbackQuery('confirm_application', handleError(async (ct
     };
     
     const application = await applicationRepository.create(applicationForm);
+    
+    // Обновляем роль пользователя с VISITOR на APPLICANT после подачи заявки
+    if (RoleManager.isVisitor(user)) {
+      await userRepository.updateRole(user.id, RoleManager.ROLES.APPLICANT);
+    }
     
     // Очищаем данные сессии
     ctx.session.form = {};

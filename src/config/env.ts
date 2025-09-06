@@ -28,6 +28,14 @@ const config = {
     rconPassword: process.env.MINECRAFT_RCON_PASSWORD || '',
   },
   
+  // Информация о сервере для отображения
+  server: {
+    displayIp: process.env.SERVER_DISPLAY_IP || process.env.MINECRAFT_HOST || 'localhost',
+    version: process.env.SERVER_VERSION || '1.20.2',
+    gamemode: process.env.SERVER_GAMEMODE || 'Выживание',
+    accessType: process.env.SERVER_ACCESS_TYPE || 'Демократический белый список',
+  },
+  
   // Настройки приложения
   app: {
     env: process.env.NODE_ENV || 'development',
@@ -51,4 +59,4 @@ if (!config.botToken) {
   process.exit(1);
 }
 
-export default config; 
+export default config;

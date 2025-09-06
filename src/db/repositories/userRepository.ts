@@ -64,7 +64,7 @@ export class UserRepository {
         userData.username || null,
         userData.nickname || userData.username || userData.minecraftNickname,
         userData.minecraftNickname,
-        userData.role || RoleManager.ROLES.APPLICANT,
+        userData.role || RoleManager.ROLES.VISITOR,
         userData.canVote || false
       ]
     );

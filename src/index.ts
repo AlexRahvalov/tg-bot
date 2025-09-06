@@ -259,7 +259,8 @@ bot.callbackQuery(/^view_profile_(\d+)$/, async (ctx) => {
     const roleName = {
       [RoleManager.ROLES.ADMIN]: 'Администратор',
       [RoleManager.ROLES.MEMBER]: 'Участник',
-      [RoleManager.ROLES.APPLICANT]: 'Заявитель'
+      [RoleManager.ROLES.APPLICANT]: 'Заявитель',
+      [RoleManager.ROLES.VISITOR]: 'Посетитель'
     }[user.role];
     
     let message = `👤 *Профиль пользователя*\n\n` +

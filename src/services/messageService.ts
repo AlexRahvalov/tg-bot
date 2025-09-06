@@ -3,6 +3,7 @@ import type { MyContext } from "../index";
 import type { Application } from "../models/types";
 import { logger } from "../utils/logger";
 import { pluralize } from '../utils/stringUtils';
+import { MinecraftService } from './minecraftService';
 
 /**
  * Сервис для работы с сообщениями в боте
@@ -37,8 +38,22 @@ class MessageService {
         statusText = '❓ Неизвестный статус';
     }
     
-    // Добавляем информацию о голосовании, если оно идет
-    let votingInfo = '';
+    // Формируем базовое сообщение
+    let message = `📋 *Статус вашей заявки:* ${statusText}\n\n` +
+      `📅 *Дата создания:* ${application.createdAt.toLocaleDateString('ru-RU')}\n` +
+      `🎮 *Никнейм:* ${this.escapeMarkdown(application.minecraftNickname)}\n` +
+      `📝 *Причина:* ${this.escapeMarkdown(application.reason)}`;
+    
+    // Добавляем информацию о голосах для всех статусов, кроме PENDING
+    if (application.status !== ApplicationStatus.PENDING) {
+      const totalVotes = (application.positiveVotes || 0) + (application.negativeVotes || 0);
+      message += `\n\n📊 *Результаты голосования:*\n` +
+        `👍 За: ${application.positiveVotes || 0}\n` +
+        `👎 Против: ${application.negativeVotes || 0}\n` +
+        `📈 Всего голосов: ${totalVotes}`;
+    }
+    
+    // Добавляем информацию о времени для активного голосования
     if (application.status === ApplicationStatus.VOTING && application.votingEndsAt) {
       const now = new Date();
       const endDate = new Date(application.votingEndsAt);
@@ -46,19 +61,12 @@ class MessageService {
       const remainingHours = Math.floor(remainingTime / (1000 * 60 * 60));
       const remainingMinutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
       
-      votingInfo = `\n\n📊 Информация о голосовании:\n` +
-        `👍 За: ${application.positiveVotes || 0}\n` +
-        `👎 Против: ${application.negativeVotes || 0}\n` +
-        `⏱️ Осталось: ${remainingHours} ч ${remainingMinutes} мин`;
+      message += `\n⏱️ *Осталось времени:* ${remainingHours} ч ${remainingMinutes} мин`;
     }
     
-    await ctx.reply(
-      `📋 Статус вашей заявки: ${statusText}\n\n` +
-      `📅 Дата создания: ${application.createdAt.toLocaleDateString()}\n` +
-      `🎮 Никнейм: ${application.minecraftNickname}\n` +
-      `📝 Причина: ${application.reason}${votingInfo}\n\n` +
-      'Мы уведомим вас, когда статус вашей заявки изменится.'
-    );
+    message += '\n\n💬 Мы уведомим вас, когда статус вашей заявки изменится.';
+    
+    await ctx.reply(message, { parse_mode: 'Markdown' });
   }
 
   /**
@@ -206,13 +214,42 @@ _${this.escapeMarkdown(application.reason)}_
    * Форматирует текст для сообщения с информацией о сервере
    * @returns Форматированное сообщение
    */
-  getServerInfoMessage(): string {
-    return 'Информация о нашем Minecraft-сервере:\n\n' +
-      '🏠 IP-адрес: play.example.com\n' +
-      '🎮 Версия: 1.20.2\n' +
-      '👥 Режим игры: Выживание\n' +
-      '👮 Тип доступа: Демократический белый список\n\n' +
-      'Чтобы подать заявку на вступление, используйте команду /apply или кнопку "Подать заявку".';
+  async getServerInfoMessage(): Promise<string> {
+    const minecraftService = new MinecraftService();
+    
+    try {
+      const serverInfo = await minecraftService.getServerInfo();
+      
+      let message = 'Информация о нашем Minecraft-сервере:\n\n' +
+        `🏠 IP-адрес: ${serverInfo.ip}\n` +
+        `🎮 Версия: ${serverInfo.version}\n` +
+        `👥 Режим игры: ${serverInfo.gamemode}\n` +
+        `👮 Тип доступа: ${serverInfo.accessType}\n`;
+      
+      // Добавляем информацию о статусе сервера и игроках
+      if (serverInfo.online) {
+        message += `🟢 Статус: Онлайн\n`;
+        if (serverInfo.players) {
+          message += `👥 Игроков онлайн: ${serverInfo.players.online}/${serverInfo.players.max}\n`;
+        }
+      } else {
+        message += `🔴 Статус: Оффлайн\n`;
+      }
+      
+      message += '\nЧтобы подать заявку на вступление, используйте команду /apply или кнопку "Подать заявку".';
+      
+      return message;
+    } catch (error) {
+      logger.error('Ошибка при получении информации о сервере:', error);
+      
+      // Возвращаем базовую информацию в случае ошибки
+      return 'Информация о нашем Minecraft-сервере:\n\n' +
+        '🏠 IP-адрес: secretplace.su\n' +
+        '🎮 Версия: 1.20.2\n' +
+        '👥 Режим игры: Выживание\n' +
+        '👮 Тип доступа: Демократический белый список\n\n' +
+        'Чтобы подать заявку на вступление, используйте команду /apply или кнопку "Подать заявку".';
+    }
   }
 
   /**
@@ -351,4 +388,4 @@ _${this.escapeMarkdown(application.reason)}_
 }
 
 // Создаем и экспортируем инстанс сервиса
-export const messageService = new MessageService(); 
+export const messageService = new MessageService();

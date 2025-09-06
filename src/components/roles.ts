@@ -10,6 +10,7 @@ export class RoleManager {
    * Константы ролей
    */
   static readonly ROLES = {
+    VISITOR: UserRole.VISITOR,
     APPLICANT: UserRole.APPLICANT,
     MEMBER: UserRole.MEMBER,
     ADMIN: UserRole.ADMIN
@@ -19,6 +20,7 @@ export class RoleManager {
    * Отображаемые названия ролей на русском языке
    */
   static readonly ROLE_DISPLAY_NAMES = {
+    [UserRole.VISITOR]: 'Посетитель',
     [UserRole.APPLICANT]: 'Заявитель',
     [UserRole.MEMBER]: 'Участник', 
     [UserRole.ADMIN]: 'Администратор'
@@ -28,6 +30,7 @@ export class RoleManager {
    * Описания ролей
    */
   static readonly ROLE_DESCRIPTIONS = {
+    [UserRole.VISITOR]: 'Пользователь, начавший взаимодействие с ботом',
     [UserRole.APPLICANT]: 'Пользователь, подавший заявку на вступление',
     [UserRole.MEMBER]: 'Полноправный участник сообщества с правом голоса',
     [UserRole.ADMIN]: 'Администратор с полными правами управления'
@@ -37,6 +40,7 @@ export class RoleManager {
    * Иерархия ролей (чем больше число, тем выше роль)
    */
   static readonly ROLE_HIERARCHY = {
+    [UserRole.VISITOR]: 0,
     [UserRole.APPLICANT]: 1,
     [UserRole.MEMBER]: 2,
     [UserRole.ADMIN]: 3
@@ -46,6 +50,18 @@ export class RoleManager {
    * Права доступа для каждой роли
    */
   static readonly ROLE_PERMISSIONS = {
+    [UserRole.VISITOR]: {
+      canApply: true,
+      canViewOwnApplication: true,
+      canAnswerQuestions: false,
+      canVote: false,
+      canViewActiveApplications: false,
+      canRateUsers: false,
+      canAccessAdminPanel: false,
+      canManageUsers: false,
+      canManageApplications: false,
+      canManageServer: false
+    },
     [UserRole.APPLICANT]: {
       canApply: true,
       canViewOwnApplication: true,
@@ -103,6 +119,13 @@ export class RoleManager {
    */
   static isApplicant(user: User | null): boolean {
     return user?.role === UserRole.APPLICANT;
+  }
+
+  /**
+   * Проверяет, является ли пользователь посетителем
+   */
+  static isVisitor(user: User | null): boolean {
+    return user?.role === UserRole.VISITOR;
   }
 
   /**

@@ -21,6 +21,7 @@ export enum VoteType {
  * Роль пользователя
  */
 export enum UserRole {
+  VISITOR = 'visitor',       // Посетитель (начал взаимодействие, но не подал заявку)
   APPLICANT = 'applicant',   // Заявитель
   MEMBER = 'member',         // Участник
   ADMIN = 'admin'            // Администратор
