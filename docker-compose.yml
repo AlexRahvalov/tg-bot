@@ -1,0 +1,25 @@
+version: '3'
+
+services:
+  mariadb:
+    image: mariadb:latest
+    container_name: minecraft-bot-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-password}
+      MYSQL_DATABASE: ${DB_NAME:-minecraft_bot}
+      MYSQL_USER: ${DB_USER:-minecraft_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-password}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    restart: unless-stopped
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  mariadb_data: 
